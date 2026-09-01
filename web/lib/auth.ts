@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server"
 
-const ORC_ME_URL = "https://orchestrator.distark.com/api/v1/me.json"
+const ORC_ME_URL = "https://orca.distark.com/api/v1/me.json"
 
 /** Validate a bearer token against ORC. Returns true when valid. */
 export async function validateOrcToken(token: string): Promise<boolean> {

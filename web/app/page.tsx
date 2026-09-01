@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import { login, logout, getStoredUser, authenticatedFetch, type User } from "../lib/api-client"
 
 interface Column {
   key: string
@@ -21,49 +22,46 @@ interface SleepLog {
 }
 
 export default function Dashboard() {
-  const [token, setToken] = useState("")
-  const [loggedIn, setLoggedIn] = useState(false)
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [user, setUser] = useState<User | null>(null)
   const [columns, setColumns] = useState<Column[]>([])
   const [allColumns, setAllColumns] = useState<Column[]>([])
   const [logs, setLogs] = useState<SleepLog[]>([])
   const [error, setError] = useState("")
+  const [copyMsg, setCopyMsg] = useState("")
   const [loading, setLoading] = useState(false)
 
-  // Restore token from localStorage on mount
+  // Restore session from localStorage on mount
   useEffect(() => {
-    const saved = localStorage.getItem("sleeplogs_token")
-    if (saved) {
-      setToken(saved)
-      setLoggedIn(true)
+    const stored = getStoredUser()
+    if (stored) {
+      setUser(stored)
+      setEmail(stored.email)
     }
   }, [])
 
-  const headers = useCallback(() => ({
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  }), [token])
-
   // Fetch data when logged in
   useEffect(() => {
-    if (!loggedIn || !token) return
+    if (!user) return
     fetchData()
-  }, [loggedIn, token]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fetchData() {
     setLoading(true)
     setError("")
     try {
       const [colRes, logRes, allColRes] = await Promise.all([
-        fetch("/api/columns", { headers: headers() }),
-        fetch("/api/logs", { headers: headers() }),
-        fetch("/api/columns?all=1", { headers: headers() }),
+        authenticatedFetch("/api/columns"),
+        authenticatedFetch("/api/logs"),
+        authenticatedFetch("/api/columns?all=1"),
       ])
 
       if (!colRes.ok || !logRes.ok) {
         if (colRes.status === 401 || logRes.status === 401) {
-          setError("Invalid token")
-          setLoggedIn(false)
-          localStorage.removeItem("sleeplogs_token")
+          setError("Session expired — please log in again")
+          logout()
+          setUser(null)
           return
         }
         throw new Error("Failed to fetch data")
@@ -87,36 +85,31 @@ export default function Dashboard() {
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
-    if (!token.trim()) return
+    if (!email.trim() || !password) return
     setLoading(true)
     setError("")
 
-    const res = await fetch("/api/columns", {
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    })
-
-    if (res.ok) {
-      localStorage.setItem("sleeplogs_token", token)
-      setLoggedIn(true)
+    const ok = await login(email.trim(), password)
+    if (ok) {
+      setUser(getStoredUser())
+      setPassword("")
     } else {
-      setError("Invalid token")
+      setError("Invalid email or password")
     }
     setLoading(false)
   }
 
   function handleLogout() {
-    localStorage.removeItem("sleeplogs_token")
-    setToken("")
-    setLoggedIn(false)
+    logout()
+    setUser(null)
     setColumns([])
     setLogs([])
     setAllColumns([])
   }
 
   async function toggleColumn(key: string, currentEnabled: boolean) {
-    await fetch("/api/columns", {
+    await authenticatedFetch("/api/columns", {
       method: "PATCH",
-      headers: headers(),
       body: JSON.stringify({ key, enabled: !currentEnabled }),
     })
     fetchData()
@@ -126,6 +119,15 @@ export default function Dashboard() {
     if (val === null || val === undefined) return "—"
     if (fieldType === "bool") return val ? "Yes" : "No"
     return String(val)
+  }
+
+  function copyTokenForWatch() {
+    const token = getToken()
+    if (!token) return
+    navigator.clipboard.writeText(token).then(() => {
+      setCopyMsg("Copied! Paste into watch settings")
+      setTimeout(() => setCopyMsg(""), 3000)
+    })
   }
 
   function exportCSV() {
@@ -151,18 +153,28 @@ export default function Dashboard() {
 
   // ─── Login Screen ──────────────────────────────────────────
 
-  if (!loggedIn) {
+  if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <form onSubmit={handleLogin} className="bg-white p-8 rounded-lg shadow-md w-96">
           <h1 className="text-2xl font-bold mb-6">SleepLogs</h1>
-          <label className="block text-sm font-medium mb-2">Distark ORC Token</label>
+          <label className="block text-sm font-medium mb-2">Email</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="w-full border rounded px-3 py-2 mb-4"
+            placeholder="you@distark.com"
+            autoComplete="email"
+          />
+          <label className="block text-sm font-medium mb-2">Password</label>
           <input
             type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
             className="w-full border rounded px-3 py-2 mb-4"
-            placeholder="Enter your ORC API token"
+            placeholder="••••••••"
+            autoComplete="current-password"
           />
           {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
           <button
@@ -170,7 +182,7 @@ export default function Dashboard() {
             disabled={loading}
             className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50"
           >
-            {loading ? "Checking..." : "Login"}
+            {loading ? "Logging in..." : "Login"}
           </button>
         </form>
       </div>
@@ -182,8 +194,13 @@ export default function Dashboard() {
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">SleepLogs</h1>
+        <div>
+          <h1 className="text-2xl font-bold">SleepLogs</h1>
+          <p className="text-sm text-gray-500">{user.email}</p>
+        </div>
         <div className="flex gap-3">
+          <button onClick={copyTokenForWatch} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-sm" title="Copy your ORC token for the watch app's settings">Get Watch Token</button>
+          {copyMsg && <span className="text-xs text-green-600 self-center">{copyMsg}</span>}
           <button onClick={exportCSV} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm">
             Export CSV
           </button>
