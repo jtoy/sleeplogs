@@ -104,7 +104,7 @@ static void update_display(void) {
       break;
     default:
       snprintf(value_buf, sizeof(value_buf), "?");
-      snprintf(hint_buf, sizeof(hint_buf), "");
+      hint_buf[0] = '\0';
       break;
   }
 
@@ -306,6 +306,10 @@ static void prefill_health_data(void) {
 }
 
 /* ─── AppMessage ──────────────────────────────────────────────── */
+static void prv_exit_after_timeout(void *data) {
+  (void)data;
+  window_stack_pop_all(true);
+}
 static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   (void)context;
 
@@ -333,7 +337,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   if (fail_tuple) {
     text_layer_set_text(s_status_layer, "No connection.\nCheck phone & token.");
     /* Exit after 3 seconds */
-    app_timer_register(3000, (AppTimerCallback)window_stack_pop_all, NULL);
+    app_timer_register(3000, prv_exit_after_timeout, NULL);
     return;
   }
 
@@ -344,7 +348,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
       text_layer_set_text(s_status_layer, "Saved!");
       /* Schedule next daily wakeup and exit after 2s */
       schedule_daily_wakeup();
-      app_timer_register(2000, (AppTimerCallback)window_stack_pop_all, NULL);
+      app_timer_register(2000, prv_exit_after_timeout, NULL);
     } else {
       text_layer_set_text(s_status_layer, "Save failed.");
     }

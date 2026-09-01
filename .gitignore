@@ -17,6 +17,10 @@ Thumbs.db
 # Compiled test binaries
 watch/test_sleeplogs
 
+# Pebble build output
+watch/build/
+watch/.lock-waf*
+
 # Build artifacts
 web/next-env.d.ts
 

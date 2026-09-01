@@ -65,12 +65,12 @@ function fetchColumns() {
         sendColumnsFailed();
       }
     } else {
-      console.log('Columns fetch error: ' + xhr.status);
+      console.log('Columns fetch HTTP error: ' + xhr.status + ' url=' + url);
       sendColumnsFailed();
     }
   };
   xhr.onerror = function() {
-    console.log('Columns fetch network error');
+    console.log('Columns fetch network error (CORS? phone online?): ' + url);
     sendColumnsFailed();
   };
   xhr.open('GET', url, true);
@@ -140,6 +140,18 @@ Pebble.addEventListener('appmessage', function(e) {
 });
 
 Pebble.addEventListener('showConfiguration', function() {
+  // Clay only auto-saves values on a previous Save. Re-seed clay-settings from
+  // our own stored values so the config page shows the saved token/URL on reopen
+  // (stored values live on the phone in localStorage, never on the watch).
+  var token = localStorage.getItem('orcToken');
+  var apiUrl = localStorage.getItem('apiUrl');
+  if (token || apiUrl) {
+    var existing = {};
+    try { existing = JSON.parse(localStorage.getItem('clay-settings')) || {}; } catch (e) {}
+    if (token) existing['OrcToken'] = token;
+    if (apiUrl) existing['ApiUrl'] = apiUrl;
+    localStorage.setItem('clay-settings', JSON.stringify(existing));
+  }
   Pebble.openURL(clay.generateUrl());
 });
 
@@ -147,35 +159,50 @@ Pebble.addEventListener('webviewclosed', function(e) {
   if (!e || !e.response) return;
 
   try {
-    var dict = clay.getSettings(e.response, false);
-
-    // Store ORC token and API URL on phone (never sent to watch)
-    var tokenSetting = dict['OrcToken'];
-    if (tokenSetting !== undefined) {
-      var tokenVal = typeof tokenSetting === 'object' ? tokenSetting.value : tokenSetting;
-      if (tokenVal) {
-        localStorage.setItem('orcToken', String(tokenVal));
-        console.log('ORC token saved');
+    // e.response can arrive as a JSON string (classic Pebble app) or an
+    // already-parsed object (newer platforms). Normalize to an object here
+    // instead of relying on Clay's getSettings, which can throw on object
+    // responses and silently drop the save.
+    var parsed = e.response;
+    if (typeof parsed === 'string') {
+      if (parsed !== '' && parsed[0] !== '{') {
+        parsed = decodeURIComponent(parsed);
       }
-      delete dict['OrcToken'];
+      parsed = JSON.parse(parsed);
     }
 
-    var urlSetting = dict['ApiUrl'];
-    if (urlSetting !== undefined) {
-      var urlVal = typeof urlSetting === 'object' ? urlSetting.value : urlSetting;
-      if (urlVal) {
-        localStorage.setItem('apiUrl', String(urlVal));
-        console.log('API URL saved: ' + urlVal);
-      }
-      delete dict['ApiUrl'];
-    }
-
-    // Forward remaining settings (AutoPopup, PopupHour, etc.) to watch
-    Pebble.sendAppMessage(dict, function() {
-      console.log('Settings sent to watch');
-    }, function(err) {
-      console.log('Settings send failed');
+    // Clay form values arrive wrapped as { key: { value: ... } } — unwrap them.
+    var settings = {};
+    Object.keys(parsed).forEach(function(key) {
+      var v = parsed[key];
+      settings[key] = (v !== null && typeof v === 'object') ? v.value : v;
     });
+
+    // Persist the secrets on the phone (never sent to the watch).
+    if (settings['OrcToken']) {
+      localStorage.setItem('orcToken', String(settings['OrcToken']));
+      console.log('ORC token saved (' + String(settings['OrcToken']).length + ' chars)');
+    } else {
+      console.log('No ORC token in config response');
+    }
+    if (settings['ApiUrl']) {
+      localStorage.setItem('apiUrl', String(settings['ApiUrl']));
+      console.log('API URL saved: ' + settings['ApiUrl']);
+    }
+
+    // Persist for Clay prefill on next open.
+    localStorage.setItem('clay-settings', JSON.stringify(settings));
+
+    // Forward non-secret settings to the watch.
+    delete settings['OrcToken'];
+    delete settings['ApiUrl'];
+    if (Object.keys(settings).length > 0) {
+      Pebble.sendAppMessage(settings, function() {
+        console.log('Settings sent to watch');
+      }, function(err) {
+        console.log('Settings send failed');
+      });
+    }
   } catch (ex) {
     console.log('webviewclosed error: ' + ex.message);
   }

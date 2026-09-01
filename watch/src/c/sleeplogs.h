@@ -46,7 +46,9 @@
 #define MAX_LABEL_LEN     32
 #define MAX_KEY_LEN       32
 #define MAX_ANSWER_LEN    256
-#define SECONDS_PER_DAY   86400
+#ifndef SECONDS_PER_DAY
+#define SECONDS_PER_DAY   86400  /* pebble.h already defines this on-device */
+#endif
 
 /* ─── Field types ──────────────────────────────────────────────────────── */
 typedef enum {
