@@ -1,0 +1,286 @@
+/*
+ * Standalone unit tests for SleepLogs — exercises the REAL shipping logic
+ * in src/c/sleeplogs.h (no copy). Build & run on the host (no Pebble SDK):
+ *
+ *   gcc -std=c99 -Wall -Wextra -o test_sleeplogs test_sleeplogs.c && ./test_sleeplogs
+ *
+ * Exits 0 only if every assertion passes.
+ */
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <time.h>
+
+#include "src/c/sleeplogs.h"
+
+static int g_pass = 0, g_fail = 0;
+
+#define CHECK(cond, msg) do { \
+  if (cond) { g_pass++; } \
+  else { g_fail++; printf("FAIL: %s (line %d)\n", msg, __LINE__); } \
+} while (0)
+
+/* Helper: create a struct tm for a specific date/time */
+static struct tm make_tm(int year, int mon, int day, int hour, int min) {
+  struct tm t;
+  memset(&t, 0, sizeof(t));
+  t.tm_year = year - 1900;
+  t.tm_mon = mon - 1;
+  t.tm_mday = day;
+  t.tm_hour = hour;
+  t.tm_min = min;
+  t.tm_sec = 0;
+  t.tm_isdst = -1;
+  return t;
+}
+
+int main(void) {
+  char buf[64];
+
+  /* ─── parse_field_type ──────────────────────────────────────── */
+  CHECK(parse_field_type("rating") == FIELD_RATING, "parse rating");
+  CHECK(parse_field_type("int")    == FIELD_INT,    "parse int");
+  CHECK(parse_field_type("bool")   == FIELD_BOOL,   "parse bool");
+  CHECK(parse_field_type("text")   == FIELD_TEXT,    "parse text");
+  CHECK(parse_field_type("bogus")  == FIELD_UNKNOWN, "parse unknown");
+  CHECK(parse_field_type(NULL)     == FIELD_UNKNOWN, "parse null");
+  CHECK(parse_field_type("")       == FIELD_UNKNOWN, "parse empty");
+
+  /* ─── is_valid_rating ───────────────────────────────────────── */
+  CHECK(!is_valid_rating(0), "rating 0 invalid");
+  CHECK(is_valid_rating(1),  "rating 1 valid");
+  CHECK(is_valid_rating(3),  "rating 3 valid");
+  CHECK(is_valid_rating(5),  "rating 5 valid");
+  CHECK(!is_valid_rating(6), "rating 6 invalid");
+  CHECK(!is_valid_rating(-1),"rating -1 invalid");
+
+  /* ─── adjust_int_value ──────────────────────────────────────── */
+  CHECK(adjust_int_value(3, 1, 0, 10) == 4,  "adjust +1");
+  CHECK(adjust_int_value(3, -1, 0, 10) == 2, "adjust -1");
+  CHECK(adjust_int_value(0, -1, 0, 10) == 0, "adjust floor clamp");
+  CHECK(adjust_int_value(10, 1, 0, 10) == 10,"adjust ceil clamp");
+  CHECK(adjust_int_value(5, 10, 0, 10) == 10,"adjust overshoot clamp");
+  CHECK(adjust_int_value(5, -20, 0, 10) == 0,"adjust undershoot clamp");
+  CHECK(adjust_int_value(400, 100, 0, 5000) == 500, "adjust melatonin +100");
+  CHECK(adjust_int_value(400, -100, 0, 5000) == 300, "adjust melatonin -100");
+
+  /* ─── settings defaults + validation ─────────────────────────── */
+  SleepSettings s;
+  settings_set_defaults(&s);
+  CHECK(s.auto_popup == true, "default auto_popup on");
+  CHECK(s.popup_hour == 6, "default popup_hour 6");
+  CHECK(s.popup_minute == 0, "default popup_minute 0");
+  CHECK(s.reminder_interval == 30, "default reminder 30");
+  CHECK(settings_is_valid(&s), "defaults valid");
+
+  s.popup_hour = -1;
+  CHECK(!settings_is_valid(&s), "hour -1 invalid");
+  s.popup_hour = 24;
+  CHECK(!settings_is_valid(&s), "hour 24 invalid");
+  s.popup_hour = 6;
+  s.popup_minute = 60;
+  CHECK(!settings_is_valid(&s), "minute 60 invalid");
+  s.popup_minute = 0;
+  s.reminder_interval = 3;
+  CHECK(!settings_is_valid(&s), "interval 3 invalid");
+  s.reminder_interval = 121;
+  CHECK(!settings_is_valid(&s), "interval 121 invalid");
+  s.reminder_interval = 30;
+  CHECK(settings_is_valid(&s), "restored valid");
+
+  /* ─── night_of_date ─────────────────────────────────────────── */
+
+  /* 6:00 AM → before noon → last night = yesterday */
+  {
+    struct tm t = make_tm(2026, 8, 27, 6, 0);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-08-26") == 0, "6am -> yesterday (Aug 26)");
+  }
+
+  /* 11:59 AM → before noon → yesterday */
+  {
+    struct tm t = make_tm(2026, 8, 27, 11, 59);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-08-26") == 0, "11:59am -> yesterday");
+  }
+
+  /* 12:00 PM → noon → today */
+  {
+    struct tm t = make_tm(2026, 8, 27, 12, 0);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-08-27") == 0, "noon -> today");
+  }
+
+  /* 10:00 PM → today */
+  {
+    struct tm t = make_tm(2026, 8, 27, 22, 0);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-08-27") == 0, "10pm -> today");
+  }
+
+  /* Midnight → before noon → yesterday */
+  {
+    struct tm t = make_tm(2026, 8, 27, 0, 0);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-08-26") == 0, "midnight -> yesterday");
+  }
+
+  /* Month rollover: Jan 1, 3:00 AM → Dec 31 of previous year */
+  {
+    struct tm t = make_tm(2027, 1, 1, 3, 0);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-12-31") == 0, "Jan 1 3am -> Dec 31");
+  }
+
+  /* ─── next_wakeup_time ──────────────────────────────────────── */
+  {
+    /* Create a known "now": 2026-08-27 05:00:00 */
+    struct tm t = make_tm(2026, 8, 27, 5, 0);
+    time_t now = mktime(&t);
+
+    /* Wakeup at 06:00 — should be today */
+    time_t wake = next_wakeup_time(now, 6, 0);
+    CHECK(wake > now + 30, "wakeup in future");
+    struct tm *wt = localtime(&wake);
+    CHECK(wt->tm_hour == 6, "wakeup hour 6");
+    CHECK(wt->tm_min == 0, "wakeup minute 0");
+    CHECK(wt->tm_mday == 27, "wakeup day 27 (today)");
+  }
+
+  {
+    /* now is 2026-08-27 07:00:00, wakeup at 06:00 → should be TOMORROW */
+    struct tm t = make_tm(2026, 8, 27, 7, 0);
+    time_t now = mktime(&t);
+    time_t wake = next_wakeup_time(now, 6, 0);
+    CHECK(wake > now + 30, "wakeup tomorrow in future");
+    struct tm *wt = localtime(&wake);
+    CHECK(wt->tm_hour == 6, "wakeup tomorrow hour 6");
+    CHECK(wt->tm_mday == 28, "wakeup day 28 (tomorrow)");
+  }
+
+  /* ─── format_sleep_duration ──────────────────────────────────── */
+  format_sleep_duration(23400, buf, sizeof buf);
+  CHECK(strcmp(buf, "6h 30m") == 0, "fmt 6h30m");
+  format_sleep_duration(0, buf, sizeof buf);
+  CHECK(strcmp(buf, "0h 0m") == 0, "fmt 0");
+  format_sleep_duration(36500, buf, sizeof buf);
+  CHECK(strcmp(buf, "10h 8m") == 0, "fmt 10h8m");
+  format_sleep_duration(-100, buf, sizeof buf);
+  CHECK(strcmp(buf, "0h 0m") == 0, "fmt negative clamps");
+  format_sleep_duration(3600, buf, sizeof buf);
+  CHECK(strcmp(buf, "1h 0m") == 0, "fmt 1h exactly");
+
+  /* ─── parse_columns_string ──────────────────────────────────── */
+  {
+    const char *input =
+      "sleep_rating|Sleep Rating|rating||1|5\n"
+      "woke_up_times|Wake-ups|int|0|0|20\n"
+      "nap|Nap?|bool|0||1\n"
+      "notes|Notes|text|||0\n";
+
+    ColumnDef cols[MAX_COLUMNS];
+    int count = parse_columns_string(input, cols, MAX_COLUMNS);
+    CHECK(count == 4, "parsed 4 columns");
+
+    CHECK(strcmp(cols[0].key, "sleep_rating") == 0, "col0 key");
+    CHECK(strcmp(cols[0].label, "Sleep Rating") == 0, "col0 label");
+    CHECK(cols[0].field_type == FIELD_RATING, "col0 type rating");
+    CHECK(cols[0].has_default == false, "col0 no default");
+    CHECK(cols[0].min_value == 1, "col0 min 1");
+    CHECK(cols[0].max_value == 5, "col0 max 5");
+
+    CHECK(strcmp(cols[1].key, "woke_up_times") == 0, "col1 key");
+    CHECK(cols[1].field_type == FIELD_INT, "col1 type int");
+    CHECK(cols[1].has_default == true, "col1 has default");
+    CHECK(cols[1].default_value == 0, "col1 default 0");
+    CHECK(cols[1].min_value == 0, "col1 min 0");
+    CHECK(cols[1].max_value == 20, "col1 max 20");
+
+    CHECK(strcmp(cols[2].key, "nap") == 0, "col2 key");
+    CHECK(cols[2].field_type == FIELD_BOOL, "col2 type bool");
+
+    CHECK(strcmp(cols[3].key, "notes") == 0, "col3 key");
+    CHECK(cols[3].field_type == FIELD_TEXT, "col3 type text");
+  }
+
+  /* Empty/null input */
+  {
+    ColumnDef cols[4];
+    CHECK(parse_columns_string(NULL, cols, 4) == 0, "null input");
+    CHECK(parse_columns_string("", cols, 4) == 0, "empty input");
+  }
+
+  /* Max columns limit */
+  {
+    ColumnDef cols[2];
+    const char *input =
+      "a|A|int|0|0|10\n"
+      "b|B|int|0|0|10\n"
+      "c|C|int|0|0|10\n";
+    int count = parse_columns_string(input, cols, 2);
+    CHECK(count == 2, "max_cols caps at 2");
+  }
+
+  /* ─── init_answer ───────────────────────────────────────────── */
+  {
+    ColumnDef c;
+    memset(&c, 0, sizeof c);
+    strcpy(c.key, "sleep_rating");
+    c.field_type = FIELD_RATING;
+    c.has_default = false;
+    c.min_value = 1;
+    c.max_value = 5;
+
+    Answer a;
+    init_answer(&a, &c);
+    CHECK(a.int_value == 3, "rating default middle");
+    CHECK(a.answered == false, "not answered initially");
+  }
+  {
+    ColumnDef c;
+    memset(&c, 0, sizeof c);
+    strcpy(c.key, "melatonin");
+    c.field_type = FIELD_INT;
+    c.has_default = true;
+    c.default_value = 400;
+    c.min_value = 0;
+    c.max_value = 5000;
+
+    Answer a;
+    init_answer(&a, &c);
+    CHECK(a.int_value == 400, "int with default 400");
+  }
+  {
+    ColumnDef c;
+    memset(&c, 0, sizeof c);
+    strcpy(c.key, "nap");
+    c.field_type = FIELD_BOOL;
+    c.has_default = true;
+    c.default_value = 0;
+
+    Answer a;
+    init_answer(&a, &c);
+    CHECK(a.bool_value == false, "bool default false");
+  }
+
+  /* ─── Message key constants match package.json ordering ──────── */
+  CHECK(MK_REQUEST_COLUMNS   == 10000, "MK RequestColumns");
+  CHECK(MK_COLUMNS_DATA      == 10001, "MK ColumnsData");
+  CHECK(MK_COLUMNS_FAILED    == 10002, "MK ColumnsFailed");
+  CHECK(MK_SUBMIT_LOG        == 10003, "MK SubmitLog");
+  CHECK(MK_LOG_RESULT        == 10004, "MK LogResult");
+  CHECK(MK_AUTO_POPUP        == 10005, "MK AutoPopup");
+  CHECK(MK_POPUP_HOUR        == 10006, "MK PopupHour");
+  CHECK(MK_POPUP_MINUTE      == 10007, "MK PopupMinute");
+  CHECK(MK_REMINDER_INTERVAL == 10008, "MK ReminderInterval");
+  CHECK(MK_API_URL           == 10009, "MK ApiUrl");
+  CHECK(MK_ORC_TOKEN         == 10010, "MK OrcToken");
+
+  /* ─── Summary ───────────────────────────────────────────────── */
+  int total = g_pass + g_fail;
+  printf("\n%d/%d tests passed\n", g_pass, total);
+  if (g_fail == 0) printf("ALL TESTS PASSED ✅\n");
+  else printf("%d TEST(S) FAILED ❌\n", g_fail);
+  return g_fail == 0 ? 0 : 1;
+}
