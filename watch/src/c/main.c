@@ -21,6 +21,10 @@ static TextLayer *s_value_layer;
 static TextLayer *s_hint_layer;
 static TextLayer *s_progress_layer;
 static TextLayer *s_status_layer;
+static TextLayer *s_finish_layer;
+
+/* Bottom strip users can tap to finish early. */
+#define FINISH_ZONE_HEIGHT 42
 
 /* ─── Dictation ───────────────────────────────────────────────── */
 #if defined(PBL_MICROPHONE)
@@ -76,6 +80,7 @@ static void update_display(void) {
     text_layer_set_text(s_hint_layer, "BACK = edit");
     snprintf(progress_buf, sizeof(progress_buf), "Done");
     text_layer_set_text(s_progress_layer, progress_buf);
+    text_layer_set_text(s_finish_layer, "tap below = submit ✓");
     return;
   }
 
@@ -118,6 +123,9 @@ static void update_display(void) {
   snprintf(progress_buf, sizeof(progress_buf), "%d/%d",
            s_current_question + 1, s_num_columns);
   text_layer_set_text(s_progress_layer, progress_buf);
+
+  /* Finish affordance (skip the rest) */
+  text_layer_set_text(s_finish_layer, "Finish: tap below / hold SELECT");
 }
 
 /* ─── Build and send log JSON ─────────────────────────────────── */
@@ -127,42 +135,10 @@ static void submit_log(void) {
   char night[16];
   time_t now = time(NULL);
   struct tm *lt = localtime(&now);
+  if (!lt) return;
   night_of_date(lt, night, sizeof(night));
 
-  int pos = snprintf(json, sizeof(json), "{\"night_of\":\"%s\",\"data\":{", night);
-
-  for (int i = 0; i < s_num_columns && pos < (int)sizeof(json) - 64; i++) {
-    if (i > 0) pos += snprintf(json + pos, sizeof(json) - pos, ",");
-
-    ColumnDef *c = &s_columns[i];
-    Answer *a = &s_answers[i];
-
-    switch (c->field_type) {
-      case FIELD_RATING:
-      case FIELD_INT:
-        pos += snprintf(json + pos, sizeof(json) - pos,
-                        "\"%s\":%d", c->key, a->int_value);
-        break;
-      case FIELD_BOOL:
-        pos += snprintf(json + pos, sizeof(json) - pos,
-                        "\"%s\":%s", c->key, a->bool_value ? "true" : "false");
-        break;
-      case FIELD_TEXT:
-        /* Escape quotes in text for valid JSON */
-        pos += snprintf(json + pos, sizeof(json) - pos, "\"%s\":\"", c->key);
-        for (const char *p = a->text_value; *p && pos < (int)sizeof(json) - 4; p++) {
-          if (*p == '"' || *p == '\\') {
-            json[pos++] = '\\';
-          }
-          json[pos++] = *p;
-        }
-        pos += snprintf(json + pos, sizeof(json) - pos, "\"");
-        break;
-      default:
-        break;
-    }
-  }
-  snprintf(json + pos, sizeof(json) - pos, "}}");
+  build_log_json(s_columns, s_answers, s_num_columns, night, json, sizeof(json));
 
   /* Send via AppMessage */
   DictionaryIterator *iter;
@@ -288,11 +264,48 @@ static void back_handler(ClickRecognizerRef r, void *ctx) {
   }
 }
 
+/* ─── Finish early (skip remaining questions) ───────────────── */
+static void goto_finish(void) {
+  if (!s_columns_loaded || s_num_columns == 0) return;
+  s_current_question = s_num_columns;   /* jump to the Submit screen */
+  vibes_short_pulse();
+  update_display();
+}
+
+/* Long-press SELECT = finish early (button fallback for touch). */
+static void select_long_handler(ClickRecognizerRef r, void *ctx) {
+  (void)r; (void)ctx;
+  if (s_current_question >= s_num_columns) {
+    submit_log();
+  } else {
+    goto_finish();
+  }
+}
+
+/* ─── Touch: tap the bottom strip = finish / submit ────────── */
+#if defined(PBL_TOUCH)
+static void touch_handler(const TouchEvent *event, void *context) {
+  (void)context;
+  if (event->type != TouchEvent_Liftoff) return;
+  if (!s_columns_loaded || s_num_columns == 0) return;
+  Layer *root = window_get_root_layer(s_main_window);
+  GRect b = layer_get_bounds(root);
+  if (event->y >= b.size.h - FINISH_ZONE_HEIGHT) {
+    if (s_current_question >= s_num_columns) {
+      submit_log();           /* tap on submit screen = submit */
+    } else {
+      goto_finish();          /* tap on a question = finish early */
+    }
+  }
+}
+#endif
+
 static void click_config(void *ctx) {
   (void)ctx;
   window_single_click_subscribe(BUTTON_ID_UP, up_handler);
   window_single_click_subscribe(BUTTON_ID_DOWN, down_handler);
   window_single_click_subscribe(BUTTON_ID_SELECT, select_handler);
+  window_long_click_subscribe(BUTTON_ID_SELECT, 700, select_long_handler, NULL);
   window_single_click_subscribe(BUTTON_ID_BACK, back_handler);
 }
 
@@ -489,28 +502,47 @@ static void window_load(Window *window) {
   text_layer_set_font(s_hint_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_hint_layer, GTextAlignmentCenter);
 
-  /* Status — bottom */
-  s_status_layer = text_layer_create(GRect(10, 170, b.size.w - 20, 50));
+  /* Status — bottom-mid */
+  s_status_layer = text_layer_create(GRect(10, 160, b.size.w - 20, 30));
   text_layer_set_background_color(s_status_layer, GColorClear);
   text_layer_set_text_color(s_status_layer, GColorWhite);
   text_layer_set_font(s_status_layer, fonts_get_system_font(FONT_KEY_GOTHIC_18));
   text_layer_set_text_alignment(s_status_layer, GTextAlignmentCenter);
   text_layer_set_text(s_status_layer, "Loading...");
 
+  /* Finish hint — bottom strip (tap zone) */
+  s_finish_layer = text_layer_create(GRect(0, b.size.h - 26, b.size.w, 24));
+  text_layer_set_background_color(s_finish_layer, GColorClear);
+  text_layer_set_text_color(s_finish_layer, GColorDarkGray);
+  text_layer_set_font(s_finish_layer, fonts_get_system_font(FONT_KEY_GOTHIC_14));
+  text_layer_set_text_alignment(s_finish_layer, GTextAlignmentCenter);
+  text_layer_set_text(s_finish_layer, "");
+
   layer_add_child(root, text_layer_get_layer(s_progress_layer));
   layer_add_child(root, text_layer_get_layer(s_title_layer));
   layer_add_child(root, text_layer_get_layer(s_value_layer));
   layer_add_child(root, text_layer_get_layer(s_hint_layer));
   layer_add_child(root, text_layer_get_layer(s_status_layer));
+  layer_add_child(root, text_layer_get_layer(s_finish_layer));
+
+#if defined(PBL_TOUCH)
+  if (touch_service_is_enabled()) {
+    touch_service_subscribe(touch_handler, NULL);
+  }
+#endif
 }
 
 static void window_unload(Window *window) {
   (void)window;
+#if defined(PBL_TOUCH)
+  touch_service_unsubscribe();
+#endif
   text_layer_destroy(s_title_layer);
   text_layer_destroy(s_value_layer);
   text_layer_destroy(s_hint_layer);
   text_layer_destroy(s_progress_layer);
   text_layer_destroy(s_status_layer);
+  text_layer_destroy(s_finish_layer);
 }
 
 /* ─── Init / Deinit ────────────────────────────────────────────── */

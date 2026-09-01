@@ -294,4 +294,63 @@ static inline void init_answer(Answer *a, const ColumnDef *c) {
   }
 }
 
+/* ─── Build the submit JSON payload ──────────────────────────────
+ * {"night_of":"YYYY-MM-DD","data":{"key":value,...}}
+ * Only columns with answered=true are included, so finishing early never
+ * writes default values for skipped questions. Text values are escaped.
+ * Returns number of bytes written.
+ */
+static inline int build_log_json(const ColumnDef *cols, const Answer *answers,
+                                 int num, const char *night_of,
+                                 char *buf, int bufsize) {
+  if (!buf || bufsize <= 0) return 0;
+  int pos = 0;
+  int len = snprintf(buf, bufsize, "{\"night_of\":\"%s\",\"data\":{", night_of ? night_of : "");
+  if (len < 0) return 0;
+  pos = (len >= bufsize) ? (bufsize - 1) : len;
+
+  bool any = false;
+  for (int i = 0; i < num && pos < bufsize - 8; i++) {
+    if (!answers[i].answered) continue;
+    if (any) buf[pos++] = ',';
+    any = true;
+
+    const ColumnDef *c = &cols[i];
+    const Answer *a = &answers[i];
+    int w = 0;
+    switch (c->field_type) {
+      case FIELD_RATING:
+      case FIELD_INT:
+        w = snprintf(buf + pos, bufsize - pos, "\"%s\":%d", c->key, a->int_value);
+        break;
+      case FIELD_BOOL:
+        w = snprintf(buf + pos, bufsize - pos, "\"%s\":%s", c->key, a->bool_value ? "true" : "false");
+        break;
+      case FIELD_TEXT: {
+        w = snprintf(buf + pos, bufsize - pos, "\"%s\":\"", c->key);
+        pos += (w >= 0) ? (w > bufsize - pos ? bufsize - pos : w) : 0;
+        for (const char *p = a->text_value; *p && pos < bufsize - 2; p++) {
+          if (*p == '"' || *p == '\\') buf[pos++] = '\\';
+          buf[pos++] = *p;
+        }
+        if (pos < bufsize - 1) buf[pos++] = '"';
+        continue;   /* pos already updated in the loop */
+      }
+      default:
+        break;
+    }
+    if (w < 0) return pos;
+    pos += (w > (bufsize - pos)) ? (bufsize - pos) : w;
+  }
+
+  if (pos < bufsize - 1) {
+    int tail = snprintf(buf + pos, bufsize - pos, "}}");
+    if (tail < 0) return pos;
+    pos += (tail > (bufsize - pos)) ? (bufsize - pos) : tail;
+  } else if (bufsize > 0) {
+    buf[bufsize - 1] = '\0';
+  }
+  return pos;
+}
+
 #endif /* SLEEPLOGS_H */

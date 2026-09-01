@@ -277,6 +277,55 @@ int main(void) {
   CHECK(MK_API_URL           == 10009, "MK ApiUrl");
   CHECK(MK_ORC_TOKEN         == 10010, "MK OrcToken");
 
+  /* ─── build_log_json ──────────────────────────────────────── */
+  {
+    ColumnDef cols[3];
+    Answer   ans[3];
+    memset(cols, 0, sizeof(cols));
+    memset(ans, 0, sizeof(ans));
+    strcpy(cols[0].key, "sleep_rating"); cols[0].field_type = FIELD_RATING;
+    strcpy(cols[1].key, "woke_up_times"); cols[1].field_type = FIELD_INT;
+    strcpy(cols[2].key, "nap"); cols[2].field_type = FIELD_BOOL;
+
+    char json[512];
+    char m[256];
+
+    /* none answered → empty data object */
+    int n = build_log_json(cols, ans, 3, "2026-09-01", json, sizeof(json));
+    snprintf(m, sizeof(m), "none answered → empty data (got %s)", json);
+    CHECK(strcmp(json, "{\"night_of\":\"2026-09-01\",\"data\":{}}") == 0, m);
+    CHECK(n > 0, "build_log_json: nonzero length");
+
+    /* only answered fields included */
+    ans[1].answered = true; ans[1].int_value = 3;
+    n = build_log_json(cols, ans, 3, "2026-09-01", json, sizeof(json));
+    snprintf(m, sizeof(m), "only answered fields (got %s)", json);
+    CHECK(strcmp(json, "{\"night_of\":\"2026-09-01\",\"data\":{\"woke_up_times\":3}}") == 0, m);
+
+    /* all three: int + bool + rating order */
+    ans[0].answered = true; ans[0].int_value = 5;
+    ans[2].answered = true; ans[2].bool_value = true;
+    n = build_log_json(cols, ans, 3, "2026-09-01", json, sizeof(json));
+    snprintf(m, sizeof(m), "mixed fields (got %s)", json);
+    CHECK(strcmp(json,
+      "{\"night_of\":\"2026-09-01\",\"data\":{\"sleep_rating\":5,\"woke_up_times\":3,\"nap\":true}}") == 0, m);
+
+    /* text escaping */
+    ColumnDef tcol; memset(&tcol, 0, sizeof(tcol));
+    Answer   tans;  memset(&tans, 0, sizeof(tans));
+    strcpy(tcol.key, "notes"); tcol.field_type = FIELD_TEXT;
+    tans.answered = true;
+    strcpy(tans.text_value, "He said \"hi\" then \\ ok");
+    n = build_log_json(&tcol, &tans, 1, "2026-09-01", json, sizeof(json));
+    snprintf(m, sizeof(m), "text escaping (got %s)", json);
+    CHECK(strcmp(json,
+      "{\"night_of\":\"2026-09-01\",\"data\":{\"notes\":\"He said \\\"hi\\\" then \\\\ ok\"}}") == 0, m);
+
+    /* null night_of tolerated */
+    n = build_log_json(cols, ans, 3, NULL, json, sizeof(json));
+    CHECK(strstr(json, "\"night_of\":\"\"") != NULL, "build_log_json: null night_of");
+  }
+
   /* ─── Summary ───────────────────────────────────────────────── */
   int total = g_pass + g_fail;
   printf("\n%d/%d tests passed\n", g_pass, total);
