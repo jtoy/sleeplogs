@@ -10,6 +10,10 @@ static int s_current_question = 0;
 static bool s_submitted = false;
 static bool s_columns_loaded = false;
 
+/* ─── PKJS-ready retry state ─────────────────────────────── */
+static AppTimer *s_retry_timer;
+static int s_retry_count;
+
 /* ─── UI ──────────────────────────────────────────────────────── */
 static Window *s_main_window;
 static TextLayer *s_title_layer;
@@ -183,6 +187,14 @@ static void dictation_callback(DictationSession *session, DictationSessionStatus
     ans->text_value[MAX_ANSWER_LEN - 1] = '\0';
     ans->answered = true;
     update_display();
+  } else if (status != DictationSessionStatusSuccess && s_current_question < s_num_columns) {
+    /* Dictation unavailable or cancelled — mark skipped and advance so the
+     * questionnaire never dead-ends (real watches or emulator without mic). */
+    APP_LOG(APP_LOG_LEVEL_WARNING, "Dictation failed (%d) — skipping field", (int)status);
+    s_answers[s_current_question].answered = true;
+    s_answers[s_current_question].text_value[0] = '\0';
+    s_current_question++;
+    update_display();
   }
 }
 #endif
@@ -313,11 +325,16 @@ static void prv_exit_after_timeout(void *data) {
 static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   (void)context;
 
+  APP_LOG(APP_LOG_LEVEL_INFO, "Inbox message received");
+
   /* Columns data from PKJS */
   Tuple *cols_tuple = dict_find(iter, MESSAGE_KEY_ColumnsData);
   if (cols_tuple) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "ColumnsData received");
+    if (s_retry_timer) { app_timer_cancel(s_retry_timer); s_retry_timer = NULL; }
     s_num_columns = parse_columns_string(cols_tuple->value->cstring,
                                           s_columns, MAX_COLUMNS);
+    APP_LOG(APP_LOG_LEVEL_INFO, "Parsed %d columns", s_num_columns);
     s_columns_loaded = true;
 
     /* Initialize answers */
@@ -332,10 +349,23 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     return;
   }
 
-  /* Columns failed */
+  /* Columns failed — code: 1=no token, 2=network, 3=server, 4=auth */
   Tuple *fail_tuple = dict_find(iter, MESSAGE_KEY_ColumnsFailed);
   if (fail_tuple) {
-    text_layer_set_text(s_status_layer, "No connection.\nCheck phone & token.");
+    int32_t code = fail_tuple->value->int32;
+    APP_LOG(APP_LOG_LEVEL_WARNING, "ColumnsFailed code=%ld", (long)code);
+    if (s_retry_timer) { app_timer_cancel(s_retry_timer); s_retry_timer = NULL; }
+    switch (code) {
+      case 1:
+        text_layer_set_text(s_status_layer, "No token yet.\nWatch Settings + paste token,\nthen reopen.");
+        break;
+      case 4:
+        text_layer_set_text(s_status_layer, "Token rejected.\nCheck your token in\nWatch Settings.");
+        break;
+      default:
+        text_layer_set_text(s_status_layer, "No connection.\nCheck phone & token.");
+        break;
+    }
     /* Exit after 3 seconds */
     app_timer_register(3000, prv_exit_after_timeout, NULL);
     return;
@@ -344,6 +374,7 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   /* Log result */
   Tuple *result_tuple = dict_find(iter, MESSAGE_KEY_LogResult);
   if (result_tuple) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "LogResult=%ld", (long)result_tuple->value->int32);
     if (result_tuple->value->int32 == 1) {
       text_layer_set_text(s_status_layer, "Saved!");
       /* Schedule next daily wakeup and exit after 2s */
@@ -360,16 +391,16 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
   Tuple *t;
 
   t = dict_find(iter, MESSAGE_KEY_AutoPopup);
-  if (t) { s_settings.auto_popup = (t->value->int32 != 0); changed = true; }
+  if (t) { s_settings.auto_popup = (t->value->int32 != 0); changed = true; APP_LOG(APP_LOG_LEVEL_INFO, "AutoPopup=%ld", (long)t->value->int32); }
 
   t = dict_find(iter, MESSAGE_KEY_PopupHour);
-  if (t) { s_settings.popup_hour = t->value->int32; changed = true; }
+  if (t) { s_settings.popup_hour = t->value->int32; changed = true; APP_LOG(APP_LOG_LEVEL_INFO, "PopupHour=%ld", (long)t->value->int32); }
 
   t = dict_find(iter, MESSAGE_KEY_PopupMinute);
-  if (t) { s_settings.popup_minute = t->value->int32; changed = true; }
+  if (t) { s_settings.popup_minute = t->value->int32; changed = true; APP_LOG(APP_LOG_LEVEL_INFO, "PopupMinute=%ld", (long)t->value->int32); }
 
   t = dict_find(iter, MESSAGE_KEY_ReminderInterval);
-  if (t) { s_settings.reminder_interval = t->value->int32; changed = true; }
+  if (t) { s_settings.reminder_interval = t->value->int32; changed = true; APP_LOG(APP_LOG_LEVEL_INFO, "ReminderInterval=%ld", (long)t->value->int32); }
 
   if (changed) {
     prv_save_settings();
@@ -401,6 +432,27 @@ static void request_columns(void) {
     dict_write_int32(iter, MESSAGE_KEY_RequestColumns, 1);
     app_message_outbox_send();
   }
+}
+
+/* ─── PKJS ready race: the phone needs time to load app JS before it
+ * accepts AppMessages. If we request columns before PKJS is ready the
+ * message is dropped and we'd hang on "Loading..." forever.
+ * Retry every 2s until columns arrive (or we give up after 15 tries). */
+static void columns_retry_timer_cb(void *data);
+
+static void columns_retry_timer_cb(void *data) {
+  (void)data;
+  s_retry_timer = NULL;
+  if (s_columns_loaded || s_num_columns > 0) return;
+  if (s_retry_count >= 15) {
+    text_layer_set_text(s_status_layer, "No response from phone.\nCheck the Pebble app.\nSet token in Settings.");
+    app_timer_register(3000, prv_exit_after_timeout, NULL);
+    return;
+  }
+  s_retry_count++;
+  APP_LOG(APP_LOG_LEVEL_INFO, "Retrying RequestColumns (%d)", s_retry_count);
+  request_columns();
+  s_retry_timer = app_timer_register(2000, columns_retry_timer_cb, NULL);
 }
 
 /* ─── Window load/unload ──────────────────────────────────────── */
@@ -504,11 +556,15 @@ static void init(void) {
                                                   dictation_callback, NULL);
 #endif
 
-  /* Request columns from phone */
+  /* Request columns from phone (retry until PKJS ready) */
+  s_retry_count = 0;
+  s_retry_timer = NULL;
   request_columns();
+  s_retry_timer = app_timer_register(2000, columns_retry_timer_cb, NULL);
 }
 
 static void deinit(void) {
+  if (s_retry_timer) app_timer_cancel(s_retry_timer);
 #if defined(PBL_MICROPHONE)
   if (s_dictation_session) dictation_session_destroy(s_dictation_session);
 #endif

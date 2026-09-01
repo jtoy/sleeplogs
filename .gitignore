@@ -10,6 +10,9 @@ web/out/
 .env.*
 !.env.example
 
+# Build-time secrets (contains the ORC token — never commit)
+watch/src/pkjs/secrets.js
+
 # OS
 .DS_Store
 Thumbs.db

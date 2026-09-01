@@ -1,26 +1,48 @@
 var Clay = require('@rebble/clay');
 var clayConfig = require('./config');
+// Build-time secrets (baked into the pbw — see secrets.js)
+var secrets = require('./secrets');
+
 var clay = new Clay(clayConfig, null, { autoHandleEvents: false });
 
 // ─── State ──────────────────────────────────────────────────
-var DEFAULT_API_URL = 'https://sleeplogs.jtoy.net';
+var DEFAULT_API_URL = secrets.API_URL || 'https://sleeplogs.jtoy.net';
 
 function getApiUrl() {
-  return localStorage.getItem('apiUrl') || DEFAULT_API_URL;
+  // Preference: baked-in build secret > localStorage (phone) > default
+  return secrets.API_URL || localStorage.getItem('apiUrl') || DEFAULT_API_URL;
 }
 
 function getOrcToken() {
-  return localStorage.getItem('orcToken') || '';
+  // Preference: baked-in build secret > localStorage (phone)
+  if (secrets.ORC_TOKEN) return secrets.ORC_TOKEN;
+  var token = localStorage.getItem('orcToken');
+  if (token) return token;
+  // Last resort: Clay's own persisted settings (written by stock Clay on Save)
+  try {
+    var claySettings = JSON.parse(localStorage.getItem('clay-settings') || '{}');
+    if (claySettings['OrcToken']) return String(claySettings['OrcToken']);
+  } catch (e) {}
+  return '';
+}
+
+// Error codes sent to the watch with ColumnsFailed:
+//   1 = no token configured
+//   2 = network / CORS error
+//   3 = HTTP error (server responded)
+function sendColumnsFailed(code) {
+  Pebble.sendAppMessage({ 'ColumnsFailed': code || 2 }, function() {}, function() {});
 }
 
 // ─── Fetch columns from Vercel API ──────────────────────────
 function fetchColumns() {
   var token = getOrcToken();
   if (!token) {
-    console.log('No ORC token configured');
-    sendColumnsFailed();
+    console.log('No ORC token configured (baked secret, localStorage, or Clay)');
+    sendColumnsFailed(1);
     return;
   }
+  console.log('Using ORC token: ' + token.substring(0, 6) + '... (' + token.length + ' chars)');
 
   var url = getApiUrl() + '/api/columns';
   console.log('Fetching columns from: ' + url);
@@ -33,12 +55,11 @@ function fetchColumns() {
         var columns = response.columns;
         if (!Array.isArray(columns) || columns.length === 0) {
           console.log('No columns returned');
-          sendColumnsFailed();
+          sendColumnsFailed(3);
           return;
         }
 
-        // Build pipe-delimited string:
-        // key|label|type|default|min|max\n...
+        // Build pipe-delimited string: key|label|type|default|min|max\n...
         var lines = [];
         for (var i = 0; i < columns.length; i++) {
           var c = columns[i];
@@ -58,28 +79,24 @@ function fetchColumns() {
           console.log('Columns sent OK');
         }, function(e) {
           console.log('Columns send FAILED');
-          sendColumnsFailed();
+          sendColumnsFailed(2);
         });
       } catch (e) {
         console.log('Columns parse error: ' + e.message);
-        sendColumnsFailed();
+        sendColumnsFailed(3);
       }
     } else {
       console.log('Columns fetch HTTP error: ' + xhr.status + ' url=' + url);
-      sendColumnsFailed();
+      sendColumnsFailed(xhr.status === 401 || xhr.status === 403 ? 4 : 3);
     }
   };
   xhr.onerror = function() {
     console.log('Columns fetch network error (CORS? phone online?): ' + url);
-    sendColumnsFailed();
+    sendColumnsFailed(2);
   };
   xhr.open('GET', url, true);
   xhr.setRequestHeader('Authorization', 'Bearer ' + token);
   xhr.send();
-}
-
-function sendColumnsFailed() {
-  Pebble.sendAppMessage({ 'ColumnsFailed': 1 }, function() {}, function() {});
 }
 
 // ─── Submit sleep log to Vercel API ─────────────────────────
@@ -121,6 +138,8 @@ function sendLogResult(success) {
 // ─── Event handlers ─────────────────────────────────────────
 Pebble.addEventListener('ready', function() {
   console.log('PebbleKit JS ready for SleepLogs');
+  console.log('Token source: ' + (secrets.ORC_TOKEN ? 'baked-in secret' : (localStorage.getItem('orcToken') ? 'localStorage' : 'NONE')));
+  console.log('API URL: ' + getApiUrl());
 });
 
 Pebble.addEventListener('appmessage', function(e) {
@@ -140,9 +159,8 @@ Pebble.addEventListener('appmessage', function(e) {
 });
 
 Pebble.addEventListener('showConfiguration', function() {
-  // Clay only auto-saves values on a previous Save. Re-seed clay-settings from
-  // our own stored values so the config page shows the saved token/URL on reopen
-  // (stored values live on the phone in localStorage, never on the watch).
+  // Re-seed Clay's settings from our stored values so the config page shows the
+  // saved token/URL on reopen (stored values live on the phone in localStorage).
   var token = localStorage.getItem('orcToken');
   var apiUrl = localStorage.getItem('apiUrl');
   if (token || apiUrl) {
@@ -156,13 +174,13 @@ Pebble.addEventListener('showConfiguration', function() {
 });
 
 Pebble.addEventListener('webviewclosed', function(e) {
-  if (!e || !e.response) return;
+  if (!e || !e.response) {
+    console.log('Config page closed WITHOUT a response — nothing saved');
+    return;
+  }
 
   try {
-    // e.response can arrive as a JSON string (classic Pebble app) or an
-    // already-parsed object (newer platforms). Normalize to an object here
-    // instead of relying on Clay's getSettings, which can throw on object
-    // responses and silently drop the save.
+    // e.response can arrive as a JSON string or an already-parsed object.
     var parsed = e.response;
     if (typeof parsed === 'string') {
       if (parsed !== '' && parsed[0] !== '{') {
@@ -178,7 +196,7 @@ Pebble.addEventListener('webviewclosed', function(e) {
       settings[key] = (v !== null && typeof v === 'object') ? v.value : v;
     });
 
-    // Persist the secrets on the phone (never sent to the watch).
+    // Persist the secrets on the phone.
     if (settings['OrcToken']) {
       localStorage.setItem('orcToken', String(settings['OrcToken']));
       console.log('ORC token saved (' + String(settings['OrcToken']).length + ' chars)');
