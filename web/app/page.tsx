@@ -115,6 +115,64 @@ export default function Dashboard() {
     fetchData()
   }
 
+  /** Move a column up/down by swapping sort_order with its neighbor. */
+  async function moveColumn(key: string, dir: -1 | 1) {
+    const sorted = [...allColumns].sort((a, b) => a.sort_order - b.sort_order)
+    const idx = sorted.findIndex((c) => c.key === key)
+    const neighbor = sorted[idx + dir]
+    if (idx === -1 || !neighbor) return
+    // Swap sort_orders with two PATCHes.
+    const a = sorted[idx]
+    const b = neighbor
+    await Promise.all([
+      authenticatedFetch("/api/columns", {
+        method: "PATCH",
+        body: JSON.stringify({ key: a.key, sort_order: b.sort_order }),
+      }),
+      authenticatedFetch("/api/columns", {
+        method: "PATCH",
+        body: JSON.stringify({ key: b.key, sort_order: a.sort_order }),
+      }),
+    ])
+    fetchData()
+  }
+
+  async function deleteColumn(key: string) {
+    if (!confirm(`Remove column \"${key}\"? Its data stays in the DB.`)) return
+    await authenticatedFetch(`/api/columns?key=${encodeURIComponent(key)}`, { method: "DELETE" })
+    fetchData()
+  }
+
+  // ─── Add column form state ─────────────────────────────────
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [newCol, setNewCol] = useState({
+    key: "",
+    label: "",
+    field_type: "int",
+    min_value: "",
+    max_value: "",
+    default_value: "",
+  })
+
+  async function addColumn(e: React.FormEvent) {
+    e.preventDefault()
+    if (!newCol.key.trim() || !newCol.label.trim()) return
+    await authenticatedFetch("/api/columns", {
+      method: "POST",
+      body: JSON.stringify({
+        key: newCol.key.trim(),
+        label: newCol.label.trim(),
+        field_type: newCol.field_type,
+        min_value: newCol.min_value === "" ? null : Number(newCol.min_value),
+        max_value: newCol.max_value === "" ? null : Number(newCol.max_value),
+        default_value: newCol.default_value === "" ? null : newCol.default_value,
+      }),
+    })
+    setShowAddForm(false)
+    setNewCol({ key: "", label: "", field_type: "int", min_value: "", max_value: "", default_value: "" })
+    fetchData()
+  }
+
   function formatValue(val: unknown, fieldType: string): string {
     if (val === null || val === undefined) return "—"
     if (fieldType === "bool") return val ? "Yes" : "No"
@@ -212,22 +270,65 @@ export default function Dashboard() {
 
       {error && <p className="text-red-500 mb-4">{error}</p>}
 
-      {/* Column Toggles */}
+      {/* Column Manager — reorder, add, remove, toggle */}
       <div className="bg-white rounded-lg shadow p-4 mb-6">
-        <h2 className="text-sm font-semibold text-gray-500 mb-3">COLUMNS (toggle on/off — changes watch app in real time)</h2>
-        <div className="flex flex-wrap gap-3">
-          {allColumns.map((col) => (
-            <label key={col.key} className="flex items-center gap-2 text-sm cursor-pointer">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-gray-500">COLUMNS (order + on/off — watch app updates on next launch)</h2>
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+          >
+            {showAddForm ? "Cancel" : "+ Add Column"}
+          </button>
+        </div>
+
+        {/* Add column form */}
+        {showAddForm && (
+          <form onSubmit={addColumn} className="border rounded p-3 mb-3 bg-gray-50 grid gap-2 md:grid-cols-6">
+            <input value={newCol.key} onChange={(e) => setNewCol({ ...newCol, key: e.target.value })}
+              placeholder="key (e.g. stress_level)" className="border rounded px-2 py-1 text-sm" />
+            <input value={newCol.label} onChange={(e) => setNewCol({ ...newCol, label: e.target.value })}
+              placeholder="Label" className="border rounded px-2 py-1 text-sm" />
+            <select value={newCol.field_type} onChange={(e) => setNewCol({ ...newCol, field_type: e.target.value })}
+              className="border rounded px-2 py-1 text-sm">
+              <option value="int">int</option>
+              <option value="rating">rating</option>
+              <option value="bool">bool</option>
+              <option value="text">text</option>
+            </select>
+            <input value={newCol.min_value} onChange={(e) => setNewCol({ ...newCol, min_value: e.target.value })}
+              placeholder="min" className="border rounded px-2 py-1 text-sm" />
+            <input value={newCol.max_value} onChange={(e) => setNewCol({ ...newCol, max_value: e.target.value })}
+              placeholder="max" className="border rounded px-2 py-1 text-sm" />
+            <button type="submit" className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-sm">Add</button>
+          </form>
+        )}
+
+        {/* Column list (sorted) */}
+        <div className="space-y-1">
+          {[...allColumns].sort((a, b) => a.sort_order - b.sort_order).map((col, i) => (
+            <div key={col.key} className="flex items-center gap-2 text-sm p-1 rounded hover:bg-gray-50">
+              <span className="text-gray-400 w-5 text-right">{i + 1}.</span>
               <input
                 type="checkbox"
                 checked={col.enabled !== false}
                 onChange={() => toggleColumn(col.key, col.enabled !== false)}
                 className="rounded"
+                title="show/hide on watch"
               />
-              {col.label}
-            </label>
+              <span className="font-medium min-w-0 truncate">{col.label}</span>
+              <span className="text-gray-400 text-xs">{col.field_type}</span>
+              <span className="flex-1" />
+              <button onClick={() => moveColumn(col.key, -1)} disabled={i === 0}
+                className="px-2 py-0.5 border rounded hover:bg-gray-100 disabled:opacity-30" title="Move up">↑</button>
+              <button onClick={() => moveColumn(col.key, 1)} disabled={i === allColumns.length - 1}
+                className="px-2 py-0.5 border rounded hover:bg-gray-100 disabled:opacity-30" title="Move down">↓</button>
+              <button onClick={() => deleteColumn(col.key)}
+                className="px-2 py-0.5 border rounded text-red-600 hover:bg-red-50" title="Delete column">🗑</button>
+            </div>
           ))}
         </div>
+        <p className="text-xs text-gray-400 mt-2">Reordering and toggles apply to the watch on its next app open. Deleting keeps old data in the DB.</p>
       </div>
 
       {/* Logs Table */}

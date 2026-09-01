@@ -10,7 +10,7 @@ vi.mock("../lib/auth", () => ({
 
 import { query } from "../lib/db"
 import { requireDashboardAuth } from "../lib/auth"
-import { GET as columnsGET, PATCH as columnsPATCH } from "../app/api/columns/route"
+import { GET as columnsGET, PATCH as columnsPATCH, POST as columnsPOST, DELETE as columnsDELETE } from "../app/api/columns/route"
 import { POST as writeLogPOST } from "../app/api/write_log/route"
 import { GET as logsGET } from "../app/api/logs/route"
 
@@ -177,7 +177,64 @@ describe("GET /api/logs", () => {
   })
 })
 
-// ─── PATCH /api/columns ──────────────────────────────────────
+// ─── POST /api/columns (add) ────────────────────────────────
+
+describe("POST /api/columns", () => {
+  beforeEach(() => {
+    vi.mocked(query).mockReset()
+    vi.mocked(requireDashboardAuth).mockReset()
+    vi.mocked(requireDashboardAuth).mockResolvedValue({ ok: true })
+  })
+
+  it("creates a new column at the end of the order", async () => {
+    // First call: get next sort_order (max+1). Second: insert.
+    vi.mocked(query)
+      .mockResolvedValueOnce({ rows: [{ max_order: 7 }] } as any)
+      .mockResolvedValueOnce({
+        rows: [{ key: "stress_level", label: "Stress Level", field_type: "int", enabled: true, sort_order: 8 }],
+      } as any)
+
+    const res = await columnsPOST(mockRequest({
+      method: "POST",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "stress_level", label: "Stress Level", field_type: "int", min_value: 0, max_value: 10 },
+    }))
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.ok).toBe(true)
+    expect(json.column.key).toBe("stress_level")
+    expect(json.column.sort_order).toBe(8)
+
+    const insertSql = vi.mocked(query).mock.calls[1][0] as string
+    expect(insertSql).toContain("INSERT INTO columns")
+  })
+
+  it("rejects missing key/label", async () => {
+    const res = await columnsPOST(mockRequest({
+      method: "POST",
+      headers: { Authorization: "Bearer tok" },
+      body: { label: "No Key" },
+    }))
+    expect(res.status).toBe(400)
+  })
+
+  it("rejects invalid field_type", async () => {
+    const res = await columnsPOST(mockRequest({
+      method: "POST",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "bad", label: "Bad", field_type: "banana" },
+    }))
+    expect(res.status).toBe(400)
+  })
+
+  it("rejects 401 when unauthorized", async () => {
+    vi.mocked(requireDashboardAuth).mockResolvedValue({ ok: false, status: 401 })
+    const res = await columnsPOST(mockRequest({ method: "POST" }))
+    expect(res.status).toBe(401)
+  })
+})
+
+// ─── PATCH /api/columns (update) ────────────────────────────
 
 describe("PATCH /api/columns", () => {
   beforeEach(() => {
@@ -210,6 +267,105 @@ describe("PATCH /api/columns", () => {
     const res = await columnsPATCH(mockRequest({
       method: "PATCH",
       body: { key: "nap", enabled: false },
+    }))
+    expect(res.status).toBe(401)
+  })
+
+  it("updates sort_order for reordering", async () => {
+    vi.mocked(query).mockResolvedValue({
+      rows: [{ key: "nap", sort_order: 1 }],
+    } as any)
+
+    const res = await columnsPATCH(mockRequest({
+      method: "PATCH",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "nap", sort_order: 1 },
+    }))
+    expect(res.status).toBe(200)
+    const sql = vi.mocked(query).mock.calls[0][0] as string
+    expect(sql).toContain("sort_order")
+  })
+
+  it("updates label and field metadata", async () => {
+    vi.mocked(query).mockResolvedValue({
+      rows: [{ key: "nap", label: "Napped?", min_value: 0, max_value: 3 }],
+    } as any)
+
+    const res = await columnsPATCH(mockRequest({
+      method: "PATCH",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "nap", label: "Napped?", min_value: 0, max_value: 3 },
+    }))
+    expect(res.status).toBe(200)
+    const sql = vi.mocked(query).mock.calls[0][0] as string
+    expect(sql).toContain("label")
+    expect(sql).toContain("min_value")
+  })
+
+  it("rejects empty update body", async () => {
+    const res = await columnsPATCH(mockRequest({
+      method: "PATCH",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "nap" },
+    }))
+    expect(res.status).toBe(400)
+  })
+
+  it("rejects 404 for unknown column", async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [] } as any)
+    const res = await columnsPATCH(mockRequest({
+      method: "PATCH",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "ghost", enabled: false },
+    }))
+    expect(res.status).toBe(404)
+  })
+})
+
+// ─── DELETE /api/columns (remove) ───────────────────────────
+
+describe("DELETE /api/columns", () => {
+  beforeEach(() => {
+    vi.mocked(query).mockReset()
+    vi.mocked(requireDashboardAuth).mockReset()
+    vi.mocked(requireDashboardAuth).mockResolvedValue({ ok: true })
+  })
+
+  it("deletes a column by key", async () => {
+    vi.mocked(query).mockResolvedValue({ rowCount: 1, rows: [{ key: "notes" }] } as any)
+
+    const res = await columnsDELETE(mockRequest({
+      method: "DELETE",
+      headers: { Authorization: "Bearer tok" },
+      url: "http://localhost:3000/api/columns?key=notes",
+    }))
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.ok).toBe(true)
+
+    const sql = vi.mocked(query).mock.calls[0][0] as string
+    expect(sql).toContain("DELETE FROM columns")
+  })
+
+  it("rejects missing key param", async () => {
+    const res = await columnsDELETE(mockRequest({ method: "DELETE" }))
+    expect(res.status).toBe(400)
+  })
+
+  it("rejects 404 for unknown column", async () => {
+    vi.mocked(query).mockResolvedValue({ rowCount: 0, rows: [] } as any)
+    const res = await columnsDELETE(mockRequest({
+      method: "DELETE",
+      url: "http://localhost:3000/api/columns?key=ghost",
+    }))
+    expect(res.status).toBe(404)
+  })
+
+  it("rejects 401 when unauthorized", async () => {
+    vi.mocked(requireDashboardAuth).mockResolvedValue({ ok: false, status: 401 })
+    const res = await columnsDELETE(mockRequest({
+      method: "DELETE",
+      url: "http://localhost:3000/api/columns?key=notes",
     }))
     expect(res.status).toBe(401)
   })
