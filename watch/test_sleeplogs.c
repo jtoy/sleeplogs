@@ -133,6 +133,34 @@ int main(void) {
     CHECK(strcmp(buf, "2026-12-31") == 0, "Jan 1 3am -> Dec 31");
   }
 
+  /* Leap year: Mar 1 of a leap year 3am -> Feb 29 (2028 is leap) */
+  {
+    struct tm t = make_tm(2028, 3, 1, 3, 0);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2028-02-29") == 0, "Mar 1 2028 3am -> Feb 29 (leap)");
+  }
+
+  /* Non-leap year: Mar 1, 3am -> Feb 28 */
+  {
+    struct tm t = make_tm(2026, 3, 1, 3, 0);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-02-28") == 0, "Mar 1 2026 3am -> Feb 28");
+  }
+
+  /* 1st of month morning -> last day of previous month */
+  {
+    struct tm t = make_tm(2026, 9, 1, 5, 30);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-08-31") == 0, "Sep 1 5:30am -> Aug 31");
+  }
+
+  /* Just before noon on a Sunday -> Saturday */
+  {
+    struct tm t = make_tm(2026, 8, 30, 11, 59);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-08-29") == 0, "Aug 30 11:59am -> Aug 29");
+  }
+
   /* ─── next_wakeup_time ──────────────────────────────────────── */
   {
     /* Create a known "now": 2026-08-27 05:00:00 */
@@ -157,6 +185,34 @@ int main(void) {
     struct tm *wt = localtime(&wake);
     CHECK(wt->tm_hour == 6, "wakeup tomorrow hour 6");
     CHECK(wt->tm_mday == 28, "wakeup day 28 (tomorrow)");
+  }
+
+  {
+    /* exactly at the time (06:00:00 now, wake 06:00) → must be tomorrow
+     * (within-30s rule) */
+    struct tm t = make_tm(2026, 8, 27, 6, 0);
+    time_t now = mktime(&t);
+    time_t wake = next_wakeup_time(now, 6, 0);
+    CHECK(wake > now + 30, "wakeup exactly at time -> future");
+    struct tm *wt = localtime(&wake);
+    CHECK(wt->tm_mday == 28, "wakeup exactly at time -> tomorrow");
+  }
+
+  {
+    /* 35s before the target -> today is fine (31s+ min) */
+    struct tm t = make_tm(2026, 8, 27, 5, 59); t.tm_sec = 25;
+    time_t now = mktime(&t);
+    time_t wake = next_wakeup_time(now, 6, 0);
+    CHECK(wake - now >= 31, "wakeup 35s before -> same day, >=31s");
+  }
+
+  {
+    /* month rollover: Aug 31 23:30, wake 05:00 -> Sep 1 */
+    struct tm t = make_tm(2026, 8, 31, 23, 30);
+    time_t now = mktime(&t);
+    time_t wake = next_wakeup_time(now, 5, 0);
+    struct tm *wt = localtime(&wake);
+    CHECK(wt->tm_mon == 8 && wt->tm_mday == 1, "wakeup rolls into next month");
   }
 
   /* ─── format_sleep_duration ──────────────────────────────────── */
@@ -220,6 +276,46 @@ int main(void) {
       "c|C|int|0|0|10\n";
     int count = parse_columns_string(input, cols, 2);
     CHECK(count == 2, "max_cols caps at 2");
+  }
+
+  /* Malformed lines must not crash; parse stops at first broken line */
+  {
+    ColumnDef cols[4];
+    const char *input = "good|Good|int|0|0|10\nbrokenline_with_no_pipes\n";
+    int count = parse_columns_string(input, cols, 4);
+    CHECK(count == 1, "stops at malformed line");
+    CHECK(strcmp(cols[0].key, "good") == 0, "first good col kept");
+  }
+
+  /* Unknown field type → FIELD_UNKNOWN, not crash */
+  {
+    ColumnDef cols[2];
+    const char *input = "weird|Weird|banana|0|0|10\n";
+    int count = parse_columns_string(input, cols, 2);
+    CHECK(count == 1, "parsed unknown type line");
+    CHECK(cols[0].field_type == FIELD_UNKNOWN, "unknown -> FIELD_UNKNOWN");
+  }
+
+  /* Over-long label truncated safely */
+  {
+    ColumnDef cols[2];
+    char input[300];
+    char long_label[80];
+    memset(long_label, 'x', sizeof(long_label) - 1);
+    long_label[sizeof(long_label) - 1] = '\0';
+    snprintf(input, sizeof(input), "k|%s|int|0|0|10", long_label);
+    int count = parse_columns_string(input, cols, 2);
+    CHECK(count == 1, "parsed long label");
+    CHECK(strlen(cols[0].label) < MAX_LABEL_LEN, "label truncated to fit");
+    CHECK(strcmp(cols[0].key, "k") == 0, "key intact with long label");
+  }
+
+  /* Missing fields: line with only key|label (no type etc.) stops safely */
+  {
+    ColumnDef cols[2];
+    const char *input = "abc|Label only\n";
+    int count = parse_columns_string(input, cols, 2);
+    CHECK(count == 0, "incomplete line -> 0 cols, no crash");
   }
 
   /* ─── init_answer ───────────────────────────────────────────── */
@@ -324,6 +420,62 @@ int main(void) {
     /* null night_of tolerated */
     n = build_log_json(cols, ans, 3, NULL, json, sizeof(json));
     CHECK(strstr(json, "\"night_of\":\"\"") != NULL, "build_log_json: null night_of");
+  }
+
+  /* ─── default values ────────────────────────────────────────── */
+  {
+    ColumnDef c; memset(&c, 0, sizeof(c));
+    Answer a;
+
+    /* int default */
+    c.field_type = FIELD_INT; c.min_value = 0; c.max_value = 5000;
+    c.has_default = true; c.default_value = 400;
+    init_answer(&a, &c);
+    CHECK(a.int_value == 400 && !a.answered, "default: int 400");
+
+    /* bool "true" default (string form from API) */
+    c.field_type = FIELD_BOOL; c.default_value = 1; c.has_default = true;
+    init_answer(&a, &c);
+    CHECK(a.bool_value == true, "default: bool true");
+
+    /* bool "false" */
+    c.default_value = 0;
+    init_answer(&a, &c);
+    CHECK(a.bool_value == false, "default: bool false");
+
+    /* text default copied into text_value */
+    c.field_type = FIELD_TEXT;
+    strcpy(c.default_value_str, "slept poorly");
+    c.has_default = true;
+    init_answer(&a, &c);
+    CHECK(strcmp(a.text_value, "slept poorly") == 0, "default: text value");
+    CHECK(a.int_value == 0, "default: text leaves int at 0");
+
+    /* no default: rating = middle, int = min, bool = false, text = empty */
+    c.has_default = false;
+    c.field_type = FIELD_RATING; c.min_value = 1; c.max_value = 5;
+    init_answer(&a, &c);
+    CHECK(a.int_value == 3, "default: rating middle 3");
+    c.field_type = FIELD_INT; c.min_value = 0;
+    init_answer(&a, &c);
+    CHECK(a.int_value == 0, "default: int min");
+    c.field_type = FIELD_BOOL;
+    init_answer(&a, &c);
+    CHECK(a.bool_value == false, "default: bool false");
+    c.field_type = FIELD_TEXT;
+    init_answer(&a, &c);
+    CHECK(a.text_value[0] == '\0', "default: text empty");
+
+    /* parse_columns_string: bool defaults with string names */
+    ColumnDef parsed[2];
+    int ncol = parse_columns_string("nap|Nap?|bool|true|0|1\nmel|Mel|int|400|0|5000", parsed, 2);
+    CHECK(ncol == 2, "default: parse 2 cols");
+    CHECK(parsed[0].field_type == FIELD_BOOL && parsed[0].default_value == 1 && parsed[0].has_default,
+          "default: parse bool true");
+    CHECK(parsed[1].field_type == FIELD_INT && parsed[1].default_value == 400 && parsed[1].has_default,
+          "default: parse int 400");
+    strcpy(parsed[1].default_value_str, "400");
+    CHECK(strcmp(parsed[1].default_value_str, "400") == 0, "default: raw string kept");
   }
 
   /* ─── Summary ───────────────────────────────────────────────── */

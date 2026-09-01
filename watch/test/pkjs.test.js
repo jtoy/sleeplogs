@@ -258,6 +258,65 @@ if (FakeXHR.last) {
   check(FakeXHR.last.headers["Authorization"] === "Bearer baked-tok", "12. baked token wins over localStorage");
 }
 
+// 13. Submit HTTP error (500) -> LogResult 0
+reset();
+loadPKJS({ ORC_TOKEN: "tok-x", API_URL: "" });
+FakeXHR.onSend = (x) => { x.status = 500; x.responseText = ""; };
+fire("appmessage", { payload: { SubmitLog: logJson } });
+check(FakeXHR.last && FakeXHR.last.url.includes("/api/write_log"), "13. submit hit write_log");
+const logErr = lastMessage();
+check(logErr && logErr["LogResult"] === 0, "13. LogResult 0 on HTTP 500");
+
+// 14. Columns API returns empty array -> ColumnsFailed code 3
+reset();
+loadPKJS({ ORC_TOKEN: "tok-empt", API_URL: "" });
+FakeXHR.onSend = (x) => { x.status = 200; x.responseText = JSON.stringify({ columns: [] }); };
+fire("appmessage", { payload: { RequestColumns: 1 } });
+const emptyFail = lastMessage();
+check(emptyFail && emptyFail["ColumnsFailed"] === 3, "14. empty columns -> ColumnsFailed 3");
+
+// 15. webviewclosed with only ApiUrl (no token) -> token untouched
+reset();
+loadPKJS({ ORC_TOKEN: "", API_URL: "" });
+fire("webviewclosed", { response: JSON.stringify({ ApiUrl: { value: "https://example.com" } }) });
+check(store.get("apiUrl") === "https://example.com", "15. apiUrl saved");
+check(store.get("orcToken") === undefined || store.get("orcToken") === null, "15. no token stored");
+
+// 16. Columns with a default value are passed through raw
+reset();
+loadPKJS({ ORC_TOKEN: "tok-def", API_URL: "" });
+FakeXHR.onSend = (x) => {
+  x.status = 200;
+  x.responseText = JSON.stringify({ columns: [
+    { key: "melatonin_mcg", label: "Melatonin (mcg)", field_type: "int", default_value: "400", min_value: 0, max_value: 5000 },
+    { key: "nap", label: "Nap?", field_type: "bool", default_value: "true", min_value: null, max_value: null },
+  ] });
+};
+fire("appmessage", { payload: { RequestColumns: 1 } });
+const cMsg = lastMessage();
+if (cMsg && cMsg["ColumnsData"]) {
+  check(cMsg["ColumnsData"].includes("400"), "16. int default passed through");
+  check(cMsg["ColumnsData"].includes("|true|"), "16. bool default passed through");
+}
+
+// 17. localStorage token used when no baked secret
+reset();
+store.set("orcToken", "local-tok-2");
+loadPKJS({ ORC_TOKEN: "", API_URL: "" });
+fire("appmessage", { payload: { RequestColumns: 1 } });
+if (FakeXHR.last) {
+  check(FakeXHR.last.headers["Authorization"] === "Bearer local-tok-2", "17. localStorage token used");
+}
+
+// 18. clay-settings fallback token (no orcToken key, but clay-settings has it)
+reset();
+store.set("clay-settings", JSON.stringify({ OrcToken: "clay-tok-3" }));
+loadPKJS({ ORC_TOKEN: "", API_URL: "" });
+fire("appmessage", { payload: { RequestColumns: 1 } });
+if (FakeXHR.last) {
+  check(FakeXHR.last.headers["Authorization"] === "Bearer clay-tok-3", "18. clay-settings fallback token used");
+}
+
 // ─── Summary ────────────────────────────────────────────────────────
 console.log("\n" + g_pass + "/" + (g_pass + g_fail) + " checks passed");
 if (g_fail > 0) {

@@ -141,6 +141,38 @@ describe("POST /api/write_log", () => {
     }))
     expect(res.status).toBe(401)
   })
+
+  it("stores data as JSON string", async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [{ id: 9 }] } as any)
+    const data = { sleep_rating: 4, nap: false, notes: "he said \"hi\"" }
+    await writeLogPOST(mockRequest({
+      method: "POST",
+      headers: { Authorization: "Bearer tok" },
+      body: { night_of: "2026-08-27", data },
+    }))
+    const params = vi.mocked(query).mock.calls[0][1] as unknown[]
+    expect(JSON.parse(params[1] as string)).toEqual(data)
+  })
+
+  it("accepts empty data object", async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [{ id: 10 }] } as any)
+    const res = await writeLogPOST(mockRequest({
+      method: "POST",
+      headers: { Authorization: "Bearer tok" },
+      body: { night_of: "2026-08-27" },
+    }))
+    expect(res.status).toBe(200)
+  })
+
+  it("rejects invalid JSON body", async () => {
+    const req = new Request("http://localhost:3000/api/write_log", {
+      method: "POST",
+      headers: { Authorization: "Bearer tok", "Content-Type": "application/json" },
+      body: "{not json",
+    })
+    const res = await writeLogPOST(req as any)
+    expect(res.status).toBe(400)
+  })
 })
 
 // ─── GET /api/logs ───────────────────────────────────────────
@@ -225,6 +257,28 @@ describe("POST /api/columns", () => {
       body: { key: "bad", label: "Bad", field_type: "banana" },
     }))
     expect(res.status).toBe(400)
+  })
+
+  it("rejects invalid key format", async () => {
+    const res = await columnsPOST(mockRequest({
+      method: "POST",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "Bad Key!", label: "Bad", field_type: "int" },
+    }))
+    expect(res.status).toBe(400)
+  })
+
+  it("accepts explicit sort_order", async () => {
+    vi.mocked(query).mockResolvedValue({
+      rows: [{ key: "x", sort_order: 3 }],
+    } as any)
+    const res = await columnsPOST(mockRequest({
+      method: "POST",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "x", label: "X", field_type: "bool", sort_order: 3 },
+    }))
+    expect(res.status).toBe(200)
+    expect((await res.json()).column.sort_order).toBe(3)
   })
 
   it("rejects 401 when unauthorized", async () => {
@@ -319,6 +373,52 @@ describe("PATCH /api/columns", () => {
       body: { key: "ghost", enabled: false },
     }))
     expect(res.status).toBe(404)
+  })
+
+  it("updates default_value (web-app default editor)", async () => {
+    vi.mocked(query).mockResolvedValue({
+      rows: [{ key: "melatonin_mcg", default_value: "100" }],
+    } as any)
+
+    const res = await columnsPATCH(mockRequest({
+      method: "PATCH",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "melatonin_mcg", default_value: "100" },
+    }))
+    expect(res.status).toBe(200)
+    const sql = vi.mocked(query).mock.calls[0][0] as string
+    expect(sql).toContain("default_value")
+    expect(vi.mocked(query).mock.calls[0][1]).toContain("100")
+  })
+
+  it("clears default_value when set to null", async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [{ key: "notes", default_value: null }] } as any)
+    const res = await columnsPATCH(mockRequest({
+      method: "PATCH",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "notes", default_value: null },
+    }))
+    expect(res.status).toBe(200)
+    const params = vi.mocked(query).mock.calls[0][1] as unknown[]
+    expect(params[0]).toBeNull()
+  })
+
+  it("rejects invalid field_type on update", async () => {
+    const res = await columnsPATCH(mockRequest({
+      method: "PATCH",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "nap", field_type: "weird" },
+    }))
+    expect(res.status).toBe(400)
+  })
+
+  it("rejects empty label on update", async () => {
+    const res = await columnsPATCH(mockRequest({
+      method: "PATCH",
+      headers: { Authorization: "Bearer tok" },
+      body: { key: "nap", label: "" },
+    }))
+    expect(res.status).toBe(400)
   })
 })
 

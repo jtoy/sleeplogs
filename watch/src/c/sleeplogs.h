@@ -60,11 +60,13 @@ typedef enum {
 } FieldType;
 
 /* ─── Column definition (parsed from API response) ─────────────────────── */
+#define MAX_DEFAULT_LEN 64
 typedef struct {
   char key[MAX_KEY_LEN];
   char label[MAX_LABEL_LEN];
   FieldType field_type;
-  int  default_value;   /* for int/rating; -1 = no default */
+  int  default_value;        /* for int/rating/bool; parsed numeric */
+  char default_value_str[MAX_DEFAULT_LEN];  /* raw string (text/bool) */
   int  min_value;
   int  max_value;
   bool has_default;
@@ -230,13 +232,21 @@ static inline int parse_columns_string(const char *input, ColumnDef *cols, int m
     sep = strchr(field, '|');
     if (!sep || sep >= end) break;
     if (sep > field) {
-      char def_buf[32];
+      char def_buf[MAX_DEFAULT_LEN];
       len = (int)(sep - field);
       if (len >= (int)sizeof(def_buf)) len = (int)sizeof(def_buf) - 1;
       strncpy(def_buf, field, len);
       def_buf[len] = '\0';
       if (def_buf[0] != '\0') {
-        c->default_value = atoi(def_buf);
+        /* Keep the raw string (text defaults need it). */
+        strncpy(c->default_value_str, def_buf, MAX_DEFAULT_LEN - 1);
+        c->default_value_str[MAX_DEFAULT_LEN - 1] = '\0';
+        /* Numeric for int/rating. Bool parses "true"/"false"/1/0. */
+        if (c->field_type == FIELD_BOOL) {
+          c->default_value = (strcmp(def_buf, "true") == 0 || strcmp(def_buf, "1") == 0) ? 1 : 0;
+        } else {
+          c->default_value = atoi(def_buf);
+        }
         c->has_default = true;
       }
     }
@@ -278,19 +288,27 @@ static inline void init_answer(Answer *a, const ColumnDef *c) {
   a->answered = false;
   a->text_value[0] = '\0';
   if (c->has_default) {
-    if (c->field_type == FIELD_BOOL) {
-      a->bool_value = (c->default_value != 0);
-    } else {
-      a->int_value = c->default_value;
+    switch (c->field_type) {
+      case FIELD_BOOL:
+        a->bool_value = (c->default_value != 0);
+        break;
+      case FIELD_TEXT:
+        strncpy(a->text_value, c->default_value_str, MAX_ANSWER_LEN - 1);
+        a->text_value[MAX_ANSWER_LEN - 1] = '\0';
+        break;
+      default: /* rating, int */
+        a->int_value = c->default_value;
+        break;
     }
   } else {
     if (c->field_type == FIELD_RATING) {
       a->int_value = 3; /* middle of 1-5 */
     } else if (c->field_type == FIELD_INT) {
       a->int_value = c->min_value;
-    } else {
+    } else if (c->field_type == FIELD_BOOL) {
       a->bool_value = false;
     }
+    /* text: nothing (empty) */
   }
 }
 

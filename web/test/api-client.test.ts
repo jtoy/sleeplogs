@@ -102,4 +102,54 @@ describe("api-client auth", () => {
     const [, opts] = mockFetch.mock.calls[0]
     expect((opts.headers as any).Authorization).toBeUndefined()
   })
+
+  it("login returns false when ORC has no token field", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ user: 1 }) }))
+    const ok = await login("a@b.com", "pw")
+    expect(ok).toBe(false)
+    expect(getToken()).toBeNull()
+  })
+
+  it("login falls back to a stub user when me.json fails", async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ token: "t1" }) })
+      .mockRejectedValueOnce(new Error("network down"))
+    vi.stubGlobal("fetch", mockFetch)
+
+    const ok = await login("jane@distark.com", "pw")
+    expect(ok).toBe(true)
+    const user = getStoredUser()
+    expect(user!.email).toBe("jane@distark.com")
+    expect(user!.name).toBe("jane")
+  })
+
+  it("login handles network failure returning false", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")))
+    const ok = await login("a@b.com", "pw")
+    expect(ok).toBe(false)
+  })
+
+  it("login handles non-200 auth response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 401 }))
+    const ok = await login("a@b.com", "wrong")
+    expect(ok).toBe(false)
+  })
+
+  it("getStoredUser returns null when storage corrupted", async () => {
+    ;(globalThis as any).localStorage.setItem("distark_user", "{bad json")
+    expect(getStoredUser()).toBeNull()
+  })
+
+  it("authenticatedFetch preserves caller headers and adds Content-Type", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) })
+    vi.stubGlobal("fetch", mockFetch)
+    ;(globalThis as any).localStorage.setItem("distark_token", "tok")
+
+    await authenticatedFetch("/api/columns", { headers: { "X-Custom": "v" } })
+    const [, opts] = mockFetch.mock.calls[0]
+    const h = opts.headers as any
+    expect(h.Authorization).toBe("Bearer tok")
+    expect(h["X-Custom"]).toBe("v")
+    expect(h["Content-Type"]).toBe("application/json")
+  })
 })

@@ -318,6 +318,21 @@ export default function Dashboard() {
               />
               <span className="font-medium min-w-0 truncate">{col.label}</span>
               <span className="text-gray-400 text-xs">{col.field_type}</span>
+              <input
+                key={col.key + (col.default_value ?? "")}
+                defaultValue={col.default_value ?? ""}
+                onBlur={(e) => {
+                  const v = e.target.value.trim()
+                  if (v === (col.default_value ?? "")) return
+                  authenticatedFetch("/api/columns", {
+                    method: "PATCH",
+                    body: JSON.stringify({ key: col.key, default_value: v === "" ? null : v }),
+                  }).then(fetchData)
+                }}
+                placeholder="default"
+                title="Default value the watch pre-fills on this question"
+                className="w-16 border rounded px-1 py-0.5 text-xs text-center"
+              />
               <span className="flex-1" />
               <button onClick={() => moveColumn(col.key, -1)} disabled={i === 0}
                 className="px-2 py-0.5 border rounded hover:bg-gray-100 disabled:opacity-30" title="Move up">↑</button>
@@ -328,7 +343,7 @@ export default function Dashboard() {
             </div>
           ))}
         </div>
-        <p className="text-xs text-gray-400 mt-2">Reordering and toggles apply to the watch on its next app open. Deleting keeps old data in the DB.</p>
+        <p className="text-xs text-gray-400 mt-2">Reordering and toggles apply to the watch on its next app open. Deleting keeps old data in the DB. Type into a column's <span className="font-mono">default</span> box to set the value the watch pre-fills (numbers for int/rating, true/false for bool, any text for text fields).</p>
       </div>
 
       {/* Logs Table */}
