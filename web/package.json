@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:integration": "set -a && . ./.env.test > /dev/null 2>&1 && set +a && vitest run test/integration.test.ts"
   },
   "dependencies": {
     "next": "14.2.16",

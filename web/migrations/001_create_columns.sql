@@ -12,5 +12,5 @@ CREATE TABLE IF NOT EXISTS columns (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_columns_sort_order ON columns(sort_order);
-CREATE INDEX idx_columns_enabled ON columns(enabled);
+CREATE INDEX IF NOT EXISTS idx_columns_sort_order ON columns(sort_order);
+CREATE INDEX IF NOT EXISTS idx_columns_enabled ON columns(enabled);
