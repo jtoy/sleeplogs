@@ -318,21 +318,25 @@ export default function Dashboard() {
               />
               <span className="font-medium min-w-0 truncate">{col.label}</span>
               <span className="text-gray-400 text-xs">{col.field_type}</span>
-              <input
-                key={col.key + (col.default_value ?? "")}
-                defaultValue={col.default_value ?? ""}
-                onBlur={(e) => {
-                  const v = e.target.value.trim()
-                  if (v === (col.default_value ?? "")) return
-                  authenticatedFetch("/api/columns", {
-                    method: "PATCH",
-                    body: JSON.stringify({ key: col.key, default_value: v === "" ? null : v }),
-                  }).then(fetchData)
-                }}
-                placeholder="default"
-                title="Default value the watch pre-fills on this question"
-                className="w-16 border rounded px-1 py-0.5 text-xs text-center"
-              />
+              <label className="flex items-center gap-1 text-xs text-gray-500">
+                <span title="Value the watch pre-fills on this question">default</span>
+                <input
+                  key={col.key + "::" + (col.default_value ?? "")}
+                  defaultValue={col.default_value ?? ""}
+                  onBlur={(e) => {
+                    const v = e.target.value.trim()
+                    if (v === (col.default_value ?? "")) return
+                    authenticatedFetch("/api/columns", {
+                      method: "PATCH",
+                      body: JSON.stringify({ key: col.key, default_value: v === "" ? null : v }),
+                    }).then(fetchData)
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur() }}
+                  placeholder={col.field_type === "bool" ? "true/false" : col.field_type === "text" ? "text" : "e.g. 400"}
+                  title="Type a value, then click/tap away or press Enter to save"
+                  className="w-20 border rounded px-1 py-0.5 text-xs text-center"
+                />
+              </label>
               <span className="flex-1" />
               <button onClick={() => moveColumn(col.key, -1)} disabled={i === 0}
                 className="px-2 py-0.5 border rounded hover:bg-gray-100 disabled:opacity-30" title="Move up">↑</button>
