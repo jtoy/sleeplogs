@@ -12,7 +12,7 @@ import { query } from "../lib/db"
 import { requireDashboardAuth } from "../lib/auth"
 import { GET as columnsGET, PATCH as columnsPATCH, POST as columnsPOST, DELETE as columnsDELETE } from "../app/api/columns/route"
 import { POST as writeLogPOST } from "../app/api/write_log/route"
-import { GET as logsGET } from "../app/api/logs/route"
+import { GET as logsGET, DELETE as logsDELETE } from "../app/api/logs/route"
 
 function mockRequest(opts: {
   url?: string
@@ -120,6 +120,19 @@ describe("POST /api/write_log", () => {
     const sql = vi.mocked(query).mock.calls[0][0] as string
     expect(sql).toContain("ON CONFLICT (night_of)")
     expect(sql).toContain("DO UPDATE")
+    expect(sql).toContain("||")
+  })
+
+  it("merges existing data instead of replacing it", async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [{ id: 42 }] } as any)
+
+    await writeLogPOST(mockRequest({
+      method: "POST",
+      headers: { Authorization: "Bearer tok" },
+      body: { night_of: "2026-08-27", data: { sleep_rating: 4 } },
+    }))
+    const sql = vi.mocked(query).mock.calls[0][0] as string
+    expect(sql).toContain("COALESCE(sleep_logs.data, '{}'::jsonb) || EXCLUDED.data")
   })
 
   it("rejects missing night_of with 400", async () => {
@@ -205,6 +218,66 @@ describe("GET /api/logs", () => {
   it("rejects 401 when unauthorized", async () => {
     vi.mocked(requireDashboardAuth).mockResolvedValue({ ok: false, status: 401 })
     const res = await logsGET(mockRequest())
+    expect(res.status).toBe(401)
+  })
+})
+
+// ─── DELETE /api/logs ───────────────────────────────────────
+
+describe("DELETE /api/logs", () => {
+  beforeEach(() => {
+    vi.mocked(query).mockReset()
+    vi.mocked(requireDashboardAuth).mockReset()
+    vi.mocked(requireDashboardAuth).mockResolvedValue({ ok: true })
+  })
+
+  it("deletes a log by night_of", async () => {
+    vi.mocked(query).mockResolvedValue({ rowCount: 1, rows: [{ id: 3, night_of: "2026-09-01" }] } as any)
+
+    const res = await logsDELETE(mockRequest({
+      method: "DELETE",
+      headers: { Authorization: "Bearer tok" },
+      url: "http://localhost:3000/api/logs?night_of=2026-09-01",
+    }))
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.ok).toBe(true)
+    expect(json.deleted.night_of).toBe("2026-09-01")
+    const sql = vi.mocked(query).mock.calls[0][0] as string
+    expect(sql).toContain("DELETE FROM sleep_logs")
+  })
+
+  it("deletes a log by id", async () => {
+    vi.mocked(query).mockResolvedValue({ rowCount: 1, rows: [{ id: 9, night_of: "2026-09-02" }] } as any)
+    const res = await logsDELETE(mockRequest({
+      method: "DELETE",
+      headers: { Authorization: "Bearer tok" },
+      url: "http://localhost:3000/api/logs?id=9",
+    }))
+    expect(res.status).toBe(200)
+    expect(vi.mocked(query).mock.calls[0][1]).toEqual([9])
+  })
+
+  it("rejects missing identifiers", async () => {
+    const res = await logsDELETE(mockRequest({ method: "DELETE" }))
+    expect(res.status).toBe(400)
+  })
+
+  it("rejects 404 for unknown log", async () => {
+    vi.mocked(query).mockResolvedValue({ rowCount: 0, rows: [] } as any)
+    const res = await logsDELETE(mockRequest({
+      method: "DELETE",
+      url: "http://localhost:3000/api/logs?night_of=1999-01-01",
+    }))
+    expect(res.status).toBe(404)
+  })
+
+  it("rejects 401 when unauthorized", async () => {
+    vi.mocked(requireDashboardAuth).mockResolvedValue({ ok: false, status: 401 })
+    const res = await logsDELETE(mockRequest({
+      method: "DELETE",
+      url: "http://localhost:3000/api/logs?night_of=2026-09-01",
+    }))
     expect(res.status).toBe(401)
   })
 })

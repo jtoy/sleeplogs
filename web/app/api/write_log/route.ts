@@ -25,7 +25,9 @@ export async function POST(request: NextRequest) {
   const result = await query(
     `INSERT INTO sleep_logs (night_of, data)
      VALUES ($1, $2)
-     ON CONFLICT (night_of) DO UPDATE SET data = $2, updated_at = NOW()
+     ON CONFLICT (night_of) DO UPDATE
+       SET data = COALESCE(sleep_logs.data, '{}'::jsonb) || EXCLUDED.data,
+           updated_at = NOW()
      RETURNING id`,
     [night_of, JSON.stringify(data || {})]
   )

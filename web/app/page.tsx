@@ -151,6 +151,66 @@ export default function Dashboard() {
     fetchData()
   }
 
+  // ─── Add/Edit log form state ────────────────────────────────
+  const [editor, setEditor] = useState<{ night: string; values: Record<string, string>; editing: SleepLog | null } | null>(null)
+
+  function openAddLog() {
+    const values: Record<string, string> = {}
+    for (const c of columns) {
+      values[c.key] = c.default_value ?? (c.field_type === "bool" ? "false" : "")
+      if (values[c.key] === null) values[c.key] = ""
+    }
+    setEditor({ night: new Date().toISOString().slice(0, 10), values, editing: null })
+  }
+
+  function openEditLog(log: SleepLog) {
+    const values: Record<string, string> = {}
+    for (const c of columns) {
+      const v = log.data[c.key]
+      values[c.key] = v === undefined || v === null ? "" : String(v)
+    }
+    setEditor({ night: String(log.night_of).slice(0, 10), values, editing: log })
+  }
+
+  function setEditorValue(key: string, v: string) {
+    setEditor((prev) => (prev ? { ...prev, values: { ...prev.values, [key]: v } } : prev))
+  }
+
+  async function saveEditor(e: React.FormEvent) {
+    e.preventDefault()
+    if (!editor || !editor.night) return
+    const data: Record<string, unknown> = {}
+    for (const c of columns) {
+      const raw = (editor.values[c.key] ?? "").trim()
+      if (c.field_type === "bool") {
+        data[c.key] = raw === "true" || raw === "1" || raw === "yes"
+      } else if (c.field_type === "int" || c.field_type === "rating") {
+        data[c.key] = raw === "" ? null : Number(raw)
+      } else {
+        data[c.key] = raw
+      }
+    }
+    // Merge with any existing data so columns that are currently disabled/not
+    // in the form keep their stored values (server also merges on conflict).
+    if (editor.editing) {
+      for (const key of Object.keys(editor.editing.data)) {
+        if (data[key] === undefined) data[key] = editor.editing.data[key]
+      }
+    }
+    await authenticatedFetch("/api/write_log", {
+      method: "POST",
+      body: JSON.stringify({ night_of: editor.night, data }),
+    })
+    setEditor(null)
+    fetchData()
+  }
+
+  async function deleteLog(log: SleepLog) {
+    if (!confirm(`Delete the log for ${String(log.night_of).slice(0, 10)}?`)) return
+    await authenticatedFetch(`/api/logs?night_of=${encodeURIComponent(String(log.night_of).slice(0, 10))}`, { method: "DELETE" })
+    fetchData()
+  }
+
   // ─── Add column form state ─────────────────────────────────
   const [showAddForm, setShowAddForm] = useState(false)
   const [newCol, setNewCol] = useState({
@@ -387,6 +447,60 @@ export default function Dashboard() {
       </div>
 
       {/* Logs Table */}
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-sm font-semibold text-gray-500">LOGS</h2>
+        <button onClick={openAddLog} className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">+ Add Log</button>
+      </div>
+
+      {/* Add/Edit log form */}
+      {editor && (
+        <form onSubmit={saveEditor} className="bg-white rounded-lg shadow p-4 mb-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-sm">{editor.editing ? `Edit log for ${editor.night}` : "Add log"}</h3>
+            <button type="button" onClick={() => setEditor(null)} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            <label className="block text-xs font-medium text-gray-600">
+              Night of
+              <input type="date" required value={editor.night} onChange={(e) => setEditor({ ...editor, night: e.target.value })}
+                className="block w-full border rounded px-2 py-1 text-sm mt-1" />
+            </label>
+            {columns.map((c) => (
+              <label key={c.key} className="block text-xs font-medium text-gray-600">
+                {c.label}
+                {c.field_type === "bool" ? (
+                  <select value={editor.values[c.key] ?? "false"} onChange={(e) => setEditorValue(c.key, e.target.value)}
+                    className="block w-full border rounded px-2 py-1 text-sm mt-1">
+                    <option value="false">No</option>
+                    <option value="true">Yes</option>
+                  </select>
+                ) : c.field_type === "rating" ? (
+                  <select value={editor.values[c.key] ?? ""} onChange={(e) => setEditorValue(c.key, e.target.value)}
+                    className="block w-full border rounded px-2 py-1 text-sm mt-1">
+                    {["", ...Array.from({ length: 5 }, (_, i) => String(i + 1))].map((v) => (
+                      <option key={v} value={v}>{v === "" ? "—" : v}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type={c.field_type === "int" ? "number" : "text"}
+                    value={editor.values[c.key] ?? ""}
+                    onChange={(e) => setEditorValue(c.key, e.target.value)}
+                    min={c.field_type === "int" ? c.min_value ?? undefined : undefined}
+                    max={c.field_type === "int" ? c.max_value ?? undefined : undefined}
+                    className="block w-full border rounded px-2 py-1 text-sm mt-1"
+                  />
+                )}
+              </label>
+            ))}
+          </div>
+          <div className="mt-4 flex gap-2">
+            <button type="submit" className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm">Save</button>
+            <button type="button" onClick={() => setEditor(null)} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-sm">Cancel</button>
+          </div>
+        </form>
+      )}
+
       <div className="bg-white rounded-lg shadow overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -395,24 +509,29 @@ export default function Dashboard() {
               {columns.map((col) => (
                 <th key={col.key} className="px-4 py-3 text-left font-semibold">{col.label}</th>
               ))}
+              <th className="px-4 py-3 text-right font-semibold">Actions</th>
             </tr>
           </thead>
           <tbody>
             {logs.length === 0 && (
               <tr>
-                <td colSpan={columns.length + 1} className="px-4 py-8 text-center text-gray-400">
-                  No logs yet. Submit from your watch to get started.
+                <td colSpan={columns.length + 2} className="px-4 py-8 text-center text-gray-400">
+                  No logs yet. Submit from your watch, or add one above.
                 </td>
               </tr>
             )}
             {logs.map((log) => (
               <tr key={log.id} className="border-b hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium">{log.night_of}</td>
+                <td className="px-4 py-3 font-medium">{String(log.night_of).slice(0, 10)}</td>
                 {columns.map((col) => (
                   <td key={col.key} className="px-4 py-3">
                     {formatValue(log.data[col.key], col.field_type)}
                   </td>
                 ))}
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <button onClick={() => openEditLog(log)} className="px-2 py-1 border rounded hover:bg-gray-100 text-xs mr-1">Edit</button>
+                  <button onClick={() => deleteLog(log)} className="px-2 py-1 border rounded text-red-600 hover:bg-red-50 text-xs">Del</button>
+                </td>
               </tr>
             ))}
           </tbody>
