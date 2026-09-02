@@ -1,7 +1,9 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { login, logout, getStoredUser, authenticatedFetch, type User } from "../lib/api-client"
+import { useState, useEffect, useCallback, useMemo } from "react"
+import { login, logout, getStoredUser, getToken, authenticatedFetch, type User } from "../lib/api-client"
+import { randomHealthQuote } from "../lib/quotes"
+import { computeStreaks } from "../lib/streaks"
 
 interface Column {
   key: string
@@ -31,6 +33,12 @@ export default function Dashboard() {
   const [error, setError] = useState("")
   const [copyMsg, setCopyMsg] = useState("")
   const [loading, setLoading] = useState(false)
+
+  // Random health quote, picked once per page load
+  const [quote] = useState(() => randomHealthQuote())
+
+  // Streaks (rating >= 4 nights)
+  const streaks = useMemo(() => computeStreaks(logs), [logs])
 
   // Restore session from localStorage on mount
   useEffect(() => {
@@ -215,7 +223,8 @@ export default function Dashboard() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <form onSubmit={handleLogin} className="bg-white p-8 rounded-lg shadow-md w-96">
-          <h1 className="text-2xl font-bold mb-6">SleepLogs</h1>
+          <h1 className="text-2xl font-bold mb-2">SleepLogs</h1>
+          <p className="text-green-800 italic text-sm mb-6">"{quote}"</p>
           <label className="block text-sm font-medium mb-2">Email</label>
           <input
             type="email"
@@ -269,6 +278,33 @@ export default function Dashboard() {
       </div>
 
       {error && <p className="text-red-500 mb-4">{error}</p>}
+
+      {/* Inspirational quote */}
+      <div className="bg-gradient-to-r from-green-50 to-teal-50 border border-green-100 rounded-lg p-4 mb-6 text-center">
+        <p className="text-green-800 italic text-lg">"{quote}"</p>
+      </div>
+
+      {/* Streaks (rating 4+ nights) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-6">
+        <div className="bg-white rounded-lg shadow p-4 text-center">
+          <div className="text-3xl font-bold text-orange-500">🔥 {streaks.current}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Current streak
+            {streaks.current === 0 && logs.length > 0 && (
+              <span className="block text-gray-400">log a 4+ night to restart</span>
+            )}
+          </div>
+        </div>
+        <div className="bg-white rounded-lg shadow p-4 text-center">
+          <div className="text-3xl font-bold text-green-600">🏆 {streaks.longest}</div>
+          <div className="text-xs text-gray-500 mt-1">
+            Longest streak
+            {streaks.longestStart && (
+              <span className="block text-gray-400">{streaks.longestStart} → {streaks.longestEnd}</span>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Column Manager — reorder, add, remove, toggle */}
       <div className="bg-white rounded-lg shadow p-4 mb-6">
