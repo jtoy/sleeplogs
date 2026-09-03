@@ -70,9 +70,17 @@ static void schedule_daily_wakeup(void) {
 }
 
 static void schedule_reminder(void) {
+  /* Never stack reminders: cancel any pending one first, so dismissing the
+   * app repeatedly can't produce buzzing faster than the configured interval. */
+  if (persist_exists(PERSIST_REMINDER_ID_KEY)) {
+    WakeupId old = persist_read_int(PERSIST_REMINDER_ID_KEY);
+    if (old >= 0 && wakeup_query(old, NULL)) wakeup_cancel(old);
+    persist_delete(PERSIST_REMINDER_ID_KEY);
+  }
   time_t wake = time(NULL) + (s_settings.reminder_interval * 60);
   int32_t cookie = 1; /* reminder, not daily */
-  wakeup_schedule(wake, cookie, false);
+  WakeupId id = wakeup_schedule(wake, cookie, false);
+  if (id >= 0) persist_write_int(PERSIST_REMINDER_ID_KEY, id);
 }
 
 /* ─── Display ─────────────────────────────────────────────────── */
@@ -281,8 +289,9 @@ static void back_handler(ClickRecognizerRef r, void *ctx) {
     s_current_question--;
     update_display();
   } else {
-    /* Exit — schedule reminder if not submitted */
-    if (!s_submitted && s_settings.auto_popup) {
+    /* Exit — schedule a reminder only when there's actually something to log
+     * (not submitted this session AND tonight isn't already logged). */
+    if (!s_submitted && s_settings.auto_popup && !is_night_submitted_local()) {
       schedule_reminder();
     }
     window_stack_pop(true);

@@ -24,6 +24,7 @@
 #define PERSIST_WAKEUP_ID_KEY    3
 #define PERSIST_SETTINGS_VERSION 1
 #define PERSIST_SUBMITTED_KEY    4   /* string: night_of most recently logged */
+#define PERSIST_REMINDER_ID_KEY  5   /* id of the pending 30-min reminder */
 
 /* ─── Message keys (10000 + index in package.json messageKeys) ─────────── */
 #define MK_REQUEST_COLUMNS   10000
