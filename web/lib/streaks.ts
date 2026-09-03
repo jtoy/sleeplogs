@@ -20,9 +20,7 @@ export interface StreaksResult {
   longestStart: string | null
   /** End date of the longest run, or null. */
   longestEnd: string | null
-}
-
-export interface StreakLog {
+}export interface StreakLog {
   night_of: string
   data: Record<string, unknown>
 }
@@ -53,7 +51,9 @@ export function computeStreaks(logs: StreakLog[], todayISO?: string): StreaksRes
   if (!logs || logs.length === 0) return empty
 
   const today = toDayTs(todayISO ?? todayString())
-  const activeFloor = Number.isNaN(today) ? Number.NaN : today - DAY_MS // today or yesterday
+  // Live window: the last qualifying night must be today, yesterday, or the
+  // day before — tolerant of timezone/DST skew between watch and dashboard.
+  const activeFloor = Number.isNaN(today) ? Number.NaN : today - 2 * DAY_MS
 
   // Qualifying nights, sorted ascending, deduped by date.
   const days: { ts: number; date: string }[] = []

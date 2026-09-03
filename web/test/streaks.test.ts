@@ -28,6 +28,13 @@ describe("computeStreaks", () => {
     expect(r.current).toBe(0)
   })
 
+  it("a night two days ago still counts (timezone tolerance)", () => {
+    // 09-01 with today 09-03 (2 days gap) still counts as live
+    expect(computeStreaks([log("2026-09-01", 4)], "2026-09-03").current).toBe(1)
+    // but three days gap is stale
+    expect(computeStreaks([log("2026-09-01", 4)], "2026-09-04").current).toBe(0)
+  })
+
   it("single low-rated night -> empty streak", () => {
     const r = computeStreaks([log("2026-09-01", 2)], "2026-09-02")
     expect(r.longest).toBe(0)

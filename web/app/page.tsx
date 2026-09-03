@@ -49,10 +49,20 @@ export default function Dashboard() {
     }
   }, [])
 
-  // Fetch data when logged in
+  // Fetch data when logged in + auto-refresh every 45s and on window focus
+  // (so watch submissions show up without a manual refresh).
   useEffect(() => {
     if (!user) return
     fetchData()
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") fetchData()
+    }, 45000)
+    const onFocus = () => fetchData()
+    window.addEventListener("focus", onFocus)
+    return () => {
+      clearInterval(id)
+      window.removeEventListener("focus", onFocus)
+    }
   }, [user]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fetchData() {
