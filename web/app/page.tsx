@@ -511,13 +511,21 @@ export default function Dashboard() {
                       <option key={v} value={v}>{v === "" ? "—" : v}</option>
                     ))}
                   </select>
-                ) : (
-                  <input
-                    type={c.field_type === "int" ? "number" : "text"}
+                ) : c.field_type === "text" ? (
+                  <textarea
                     value={editor.values[c.key] ?? ""}
                     onChange={(e) => setEditorValue(c.key, e.target.value)}
-                    min={c.field_type === "int" ? c.min_value ?? undefined : undefined}
-                    max={c.field_type === "int" ? c.max_value ?? undefined : undefined}
+                    rows={c.key === "notes" ? 3 : 2}
+                    placeholder="type a note..."
+                    className="block w-full border rounded px-2 py-1 text-sm mt-1 resize-y"
+                  />
+                ) : (
+                  <input
+                    type="number"
+                    value={editor.values[c.key] ?? ""}
+                    onChange={(e) => setEditorValue(c.key, e.target.value)}
+                    min={c.min_value ?? undefined}
+                    max={c.max_value ?? undefined}
                     className="block w-full border rounded px-2 py-1 text-sm mt-1"
                   />
                 )}
