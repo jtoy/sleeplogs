@@ -372,6 +372,8 @@ int main(void) {
   CHECK(MK_REMINDER_INTERVAL == 10008, "MK ReminderInterval");
   CHECK(MK_API_URL           == 10009, "MK ApiUrl");
   CHECK(MK_ORC_TOKEN         == 10010, "MK OrcToken");
+  CHECK(MK_CHECK_SUBMITTED   == 10011, "MK CheckSubmitted");
+  CHECK(MK_SUBMITTED_STATUS  == 10012, "MK SubmittedStatus");
 
   /* ─── build_log_json ──────────────────────────────────────── */
   {
@@ -534,6 +536,17 @@ int main(void) {
     Answer d; memset(&d, 0, sizeof(d));
     CHECK(append_clip(&d, "") == 0, "clip: empty skipped");
     CHECK(d.clip_count == 0 && d.answered == false, "clip: empty leaves state");
+  }
+
+  /* ─── should_silence_night (wakeup silent-skip) ────────────────── */
+  {
+    CHECK(should_silence_night("2026-09-02", "2026-09-02") == true, "silence: same night -> true");
+    CHECK(should_silence_night("2026-09-02", "2026-09-03") == false, "silence: diff night -> false");
+    CHECK(should_silence_night("2026-09-02", "") == false, "silence: empty current -> false");
+    CHECK(should_silence_night("", "2026-09-02") == false, "silence: empty stored -> false");
+    CHECK(should_silence_night(NULL, "2026-09-02") == false, "silence: null stored -> false");
+    CHECK(should_silence_night("2026-09-02", NULL) == false, "silence: null current -> false");
+    CHECK(should_silence_night(NULL, NULL) == false, "silence: both null -> false");
   }
 
   /* ─── Summary ───────────────────────────────────────────────── */

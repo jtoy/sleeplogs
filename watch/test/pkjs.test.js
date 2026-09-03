@@ -317,6 +317,41 @@ if (FakeXHR.last) {
   check(FakeXHR.last.headers["Authorization"] === "Bearer clay-tok-3", "18. clay-settings fallback token used");
 }
 
+// 19. CheckSubmitted: server says the night exists -> SubmittedStatus 1
+reset();
+loadPKJS({ ORC_TOKEN: "tok-check", API_URL: "" });
+FakeXHR.onSend = (x) => {
+  x.status = 200;
+  x.responseText = JSON.stringify({ logs: [{ id: 1, night_of: "2026-09-02" }] });
+};
+fire("appmessage", { payload: { CheckSubmitted: "2026-09-02" } });
+check(FakeXHR.last && FakeXHR.last.url.includes("/api/logs?night_of=2026-09-02"), "19. check URL has night_of filter");
+const c1 = lastMessage();
+check(c1 && c1["SubmittedStatus"] === 1, "19. exists -> SubmittedStatus 1");
+
+// 20. CheckSubmitted: server says empty -> SubmittedStatus 0
+reset();
+loadPKJS({ ORC_TOKEN: "tok-check", API_URL: "" });
+FakeXHR.onSend = (x) => { x.status = 200; x.responseText = JSON.stringify({ logs: [] }); };
+fire("appmessage", { payload: { CheckSubmitted: "2026-09-03" } });
+const c2 = lastMessage();
+check(c2 && c2["SubmittedStatus"] === 0, "20. empty -> SubmittedStatus 0");
+
+// 21. CheckSubmitted: HTTP error -> SubmittedStatus 2 (fall back to prompting)
+reset();
+loadPKJS({ ORC_TOKEN: "tok-check", API_URL: "" });
+FakeXHR.onSend = (x) => { x.status = 500; x.responseText = ""; };
+fire("appmessage", { payload: { CheckSubmitted: "2026-09-02" } });
+const c3 = lastMessage();
+check(c3 && c3["SubmittedStatus"] === 2, "21. HTTP error -> SubmittedStatus 2");
+
+// 22. CheckSubmitted: no token -> 2
+reset();
+loadPKJS({ ORC_TOKEN: "", API_URL: "" });
+fire("appmessage", { payload: { CheckSubmitted: "2026-09-02" } });
+const c4 = lastMessage();
+check(c4 && c4["SubmittedStatus"] === 2, "22. no token -> SubmittedStatus 2");
+
 // ─── Summary ────────────────────────────────────────────────────────
 console.log("\n" + g_pass + "/" + (g_pass + g_fail) + " checks passed");
 if (g_fail > 0) {

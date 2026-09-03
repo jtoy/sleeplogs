@@ -34,6 +34,49 @@ function sendColumnsFailed(code) {
   Pebble.sendAppMessage({ 'ColumnsFailed': code || 2 }, function() {}, function() {});
 }
 
+// ─── Wakeup silent-skip: was tonight already logged? ──────────
+// Status to watch: 1 = already submitted, 0 = not, 2 = can't check.
+function sendSubmittedStatus(status) {
+  Pebble.sendAppMessage({ 'SubmittedStatus': status }, function() {}, function() {});
+}
+
+function checkSubmitted(nightOf) {
+  var token = getOrcToken();
+  if (!token) {
+    console.log('No ORC token for submitted-check');
+    sendSubmittedStatus(2);
+    return;
+  }
+  var url = getApiUrl() + '/api/logs?night_of=' + encodeURIComponent(nightOf);
+  console.log('Checking if ' + nightOf + ' was submitted: ' + url);
+
+  var xhr = new XMLHttpRequest();
+  xhr.onload = function() {
+    if (xhr.status === 200) {
+      try {
+        var resp = JSON.parse(xhr.responseText);
+        var logs = resp.logs || [];
+        var exists = Array.isArray(logs) && logs.length > 0;
+        console.log('night_of ' + nightOf + ' exists: ' + exists);
+        sendSubmittedStatus(exists ? 1 : 0);
+      } catch (e) {
+        console.log('Submitted-check parse error: ' + e.message);
+        sendSubmittedStatus(2);
+      }
+    } else {
+      console.log('Submitted-check HTTP error: ' + xhr.status);
+      sendSubmittedStatus(2);
+    }
+  };
+  xhr.onerror = function() {
+    console.log('Submitted-check network error');
+    sendSubmittedStatus(2);
+  };
+  xhr.open('GET', url, true);
+  xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+  xhr.send();
+}
+
 // ─── Fetch columns from Vercel API ──────────────────────────
 function fetchColumns() {
   var token = getOrcToken();
@@ -152,6 +195,11 @@ Pebble.addEventListener('appmessage', function(e) {
 
   if (payload['SubmitLog']) {
     submitLog(payload['SubmitLog']);
+    return;
+  }
+
+  if (payload['CheckSubmitted']) {
+    checkSubmitted(payload['CheckSubmitted']);
     return;
   }
 

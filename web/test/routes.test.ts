@@ -215,6 +215,22 @@ describe("GET /api/logs", () => {
     expect(sql).toContain("ORDER BY night_of DESC")
   })
 
+  it("filters by night_of for the watch silent-skip check", async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [{ id: 5, night_of: "2026-09-02" }] } as any)
+
+    const res = await logsGET(mockRequest({
+      headers: { Authorization: "Bearer tok" },
+      url: "http://localhost:3000/api/logs?night_of=2026-09-02",
+    }))
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.logs).toHaveLength(1)
+
+    const sql = vi.mocked(query).mock.calls[0][0] as string
+    expect(sql).toContain("WHERE night_of = $1")
+    expect(vi.mocked(query).mock.calls[0][1]).toEqual(["2026-09-02"])
+  })
+
   it("rejects 401 when unauthorized", async () => {
     vi.mocked(requireDashboardAuth).mockResolvedValue({ ok: false, status: 401 })
     const res = await logsGET(mockRequest())

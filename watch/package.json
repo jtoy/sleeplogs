@@ -2,7 +2,9 @@
   "name": "sleeplogs",
   "author": "MakeAwesomeHappen",
   "version": "1.0.0",
-  "keywords": ["pebble-app"],
+  "keywords": [
+    "pebble-app"
+  ],
   "private": true,
   "dependencies": {
     "@rebble/clay": "^1.0.10"
@@ -12,9 +14,16 @@
     "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "sdkVersion": "3",
     "enableMultiJS": true,
-    "targetPlatforms": ["emery"],
-    "watchapp": { "watchface": false },
-    "capabilities": ["configurable", "health"],
+    "targetPlatforms": [
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "capabilities": [
+      "configurable",
+      "health"
+    ],
     "messageKeys": [
       "RequestColumns",
       "ColumnsData",
@@ -26,8 +35,12 @@
       "PopupMinute",
       "ReminderInterval",
       "ApiUrl",
-      "OrcToken"
+      "OrcToken",
+      "CheckSubmitted",
+      "SubmittedStatus"
     ],
-    "resources": { "media": [] }
+    "resources": {
+      "media": []
+    }
   }
 }

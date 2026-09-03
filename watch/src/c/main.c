@@ -14,6 +14,17 @@ static bool s_columns_loaded = false;
 static AppTimer *s_retry_timer;
 static int s_retry_count;
 
+/* Wakeup silent-skip gate state */
+static bool s_wakeup_pending_vibrate = false;
+static bool s_check_pending = false;
+static AppTimer *s_check_timer;
+
+/* Forward decls (helpers are defined after the inbox handler) */
+static void persist_submitted_night(void);
+static bool is_night_submitted_local(void);
+static void request_submitted_check(void);
+static void prompt_questionnaire(void);
+
 /* ─── UI ──────────────────────────────────────────────────────── */
 static Window *s_main_window;
 static TextLayer *s_title_layer;
@@ -404,11 +415,34 @@ static void inbox_received_handler(DictionaryIterator *iter, void *context) {
     APP_LOG(APP_LOG_LEVEL_INFO, "LogResult=%ld", (long)result_tuple->value->int32);
     if (result_tuple->value->int32 == 1) {
       text_layer_set_text(s_status_layer, "Saved!");
+      /* Remember tonight as logged so the next wakeup stays silent. */
+      persist_submitted_night();
       /* Schedule next daily wakeup and exit after 2s */
       schedule_daily_wakeup();
       app_timer_register(2000, prv_exit_after_timeout, NULL);
     } else {
       text_layer_set_text(s_status_layer, "Save failed.");
+    }
+    return;
+  }
+
+  /* Submitted-status from the wakeup silent-skip check.
+   * 1 = already logged -> silence; 0 = not logged; 2 = error/offline. */
+  Tuple *status_tuple = dict_find(iter, MESSAGE_KEY_SubmittedStatus);
+  if (status_tuple) {
+    if (s_check_timer) { app_timer_cancel(s_check_timer); s_check_timer = NULL; }
+    s_check_pending = false;
+    int32_t status = status_tuple->value->int32;
+    APP_LOG(APP_LOG_LEVEL_INFO, "SubmittedStatus=%ld", (long)status);
+    if (status == 1) {
+      APP_LOG(APP_LOG_LEVEL_INFO, "Already submitted on server — silent skip");
+      persist_submitted_night();
+      schedule_daily_wakeup();
+      text_layer_set_text(s_status_layer, "Already logged \u2713");
+      app_timer_register(1500, prv_exit_after_timeout, NULL);
+    } else {
+      /* 0 = not submitted, 2 = couldn't check -> normal prompt */
+      prompt_questionnaire();
     }
     return;
   }
@@ -480,6 +514,72 @@ static void columns_retry_timer_cb(void *data) {
   APP_LOG(APP_LOG_LEVEL_INFO, "Retrying RequestColumns (%d)", s_retry_count);
   request_columns();
   s_retry_timer = app_timer_register(2000, columns_retry_timer_cb, NULL);
+}
+
+/* ─── Already-submitted silent-skip gate ──────────────────────────────
+ * Wakeups should not nag if tonight's log already exists (from the watch
+ * earlier, or from the web app). Local flag = free; server check only when
+ * the local flag misses (covers web submissions). */
+static void persist_submitted_night(void) {
+  char night[16];
+  time_t now = time(NULL);
+  struct tm *lt = localtime(&now);
+  if (!lt) return;
+  night_of_date(lt, night, sizeof(night));
+  persist_write_string(PERSIST_SUBMITTED_KEY, night);
+  APP_LOG(APP_LOG_LEVEL_INFO, "Persisted submitted night %s", night);
+}
+
+static bool is_night_submitted_local(void) {
+  char stored[16];
+  if (persist_read_string(PERSIST_SUBMITTED_KEY, stored, sizeof(stored)) <= 0) return false;
+  char night[16];
+  time_t now = time(NULL);
+  struct tm *lt = localtime(&now);
+  if (!lt) return false;
+  night_of_date(lt, night, sizeof(night));
+  return should_silence_night(stored, night);
+}
+
+/* Ask PKJS (via the phone) whether tonight was logged on the server. */
+static void request_submitted_check(void) {
+  char night[16];
+  time_t now = time(NULL);
+  struct tm *lt = localtime(&now);
+  if (!lt) return;
+  night_of_date(lt, night, sizeof(night));
+  DictionaryIterator *iter;
+  AppMessageResult result = app_message_outbox_begin(&iter);
+  if (result == APP_MSG_OK) {
+    dict_write_cstring(iter, MESSAGE_KEY_CheckSubmitted, night);
+    app_message_outbox_send();
+    APP_LOG(APP_LOG_LEVEL_INFO, "Asking server if %s was submitted", night);
+  }
+}
+
+/* Fall back to the normal questionnaire flow (vibrate on wakeup). */
+static void prompt_questionnaire(void) {
+  if (s_wakeup_pending_vibrate) {
+    static const uint32_t segs[] = { 200, 150, 200, 150, 200 };
+    VibePattern pat = { .durations = segs, .num_segments = 5 };
+    vibes_enqueue_custom_pattern(pat);
+    s_wakeup_pending_vibrate = false;
+  }
+  text_layer_set_text(s_status_layer, "");
+  s_retry_count = 0;
+  s_retry_timer = NULL;
+  request_columns();
+  s_retry_timer = app_timer_register(2000, columns_retry_timer_cb, NULL);
+}
+
+/* If the server-check reply never arrives, don't hang: prompt anyway. */
+static void submitted_check_timeout_cb(void *data) {
+  (void)data;
+  s_check_timer = NULL;
+  if (!s_check_pending) return;
+  s_check_pending = false;
+  APP_LOG(APP_LOG_LEVEL_WARNING, "Submitted-check timed out — prompting anyway");
+  prompt_questionnaire();
 }
 
 /* ─── Window load/unload ──────────────────────────────────────── */
@@ -574,11 +674,15 @@ static void init(void) {
     return;
   }
 
-  /* If woken by wakeup, vibrate */
-  if (launch_reason() == APP_LAUNCH_WAKEUP) {
-    static const uint32_t segs[] = { 200, 150, 200, 150, 200 };
-    VibePattern pat = { .durations = segs, .num_segments = 5 };
-    vibes_enqueue_custom_pattern(pat);
+  /* Wakeup popups (only) are gated by the already-submitted check. */
+  s_wakeup_pending_vibrate =
+    (launch_reason() == APP_LAUNCH_WAKEUP) && s_settings.auto_popup;
+
+  /* Free fast-path: this night was already logged from this watch. */
+  if (s_wakeup_pending_vibrate && is_night_submitted_local()) {
+    APP_LOG(APP_LOG_LEVEL_INFO, "Night already logged locally — skipping wakeup");
+    schedule_daily_wakeup();
+    return;   /* silent: no window, no vibration */
   }
 
   /* Create main window */
@@ -602,15 +706,22 @@ static void init(void) {
                                                   dictation_callback, NULL);
 #endif
 
-  /* Request columns from phone (retry until PKJS ready) */
-  s_retry_count = 0;
-  s_retry_timer = NULL;
-  request_columns();
-  s_retry_timer = app_timer_register(2000, columns_retry_timer_cb, NULL);
+  if (s_wakeup_pending_vibrate) {
+    /* Wakeup + not logged locally: ask the server before alarming. */
+    text_layer_set_text(s_status_layer, "Checking...");
+    s_check_pending = true;
+    s_check_timer = NULL;
+    request_submitted_check();
+    s_check_timer = app_timer_register(2500, submitted_check_timeout_cb, NULL);
+  } else {
+    /* Manual launch (or popups off): straight to the questionnaire. */
+    prompt_questionnaire();
+  }
 }
 
 static void deinit(void) {
   if (s_retry_timer) app_timer_cancel(s_retry_timer);
+  if (s_check_timer) app_timer_cancel(s_check_timer);
 #if defined(PBL_MICROPHONE)
   if (s_dictation_session) dictation_session_destroy(s_dictation_session);
 #endif

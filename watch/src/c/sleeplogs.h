@@ -23,6 +23,7 @@
 #define PERSIST_VERSION_KEY      2
 #define PERSIST_WAKEUP_ID_KEY    3
 #define PERSIST_SETTINGS_VERSION 1
+#define PERSIST_SUBMITTED_KEY    4   /* string: night_of most recently logged */
 
 /* ─── Message keys (10000 + index in package.json messageKeys) ─────────── */
 #define MK_REQUEST_COLUMNS   10000
@@ -36,6 +37,8 @@
 #define MK_REMINDER_INTERVAL 10008
 #define MK_API_URL           10009
 #define MK_ORC_TOKEN         10010
+#define MK_CHECK_SUBMITTED   10011
+#define MK_SUBMITTED_STATUS  10012
 
 /* ─── Tuple type ids (mirror Pebble TUPLE_INT / TUPLE_CSTRING) ──────────── */
 #define SL_TUPLE_INT     0
@@ -313,6 +316,16 @@ static inline void init_answer(Answer *a, const ColumnDef *c) {
     }
     /* text: nothing (empty) */
   }
+}
+
+/* ─── Silent-skip decision for the wakeup popup ─────────────────────
+ * If the most recently submitted night_of equals the night the wakeup
+ * would ask about, there is nothing to log -> skip without network.
+ */
+static inline bool should_silence_night(const char *stored_night, const char *current_night) {
+  if (!stored_night || !current_night) return false;
+  if (stored_night[0] == '\0' || current_night[0] == '\0') return false;
+  return strcmp(stored_night, current_night) == 0;
 }
 
 /* ─── Chained dictation clips ──────────────────────────────────────

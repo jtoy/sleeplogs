@@ -10,11 +10,20 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: auth.status })
   }
 
-  const result = await query(
-    `SELECT id, night_of, data, created_at, updated_at
-     FROM sleep_logs
-     ORDER BY night_of DESC`
-  )
+  const nightOf = new URL(request.url).searchParams.get("night_of")
+  const result = nightOf
+    ? await query(
+        `SELECT id, night_of, data, created_at, updated_at
+         FROM sleep_logs
+         WHERE night_of = $1
+         ORDER BY night_of DESC`,
+        [nightOf]
+      )
+    : await query(
+        `SELECT id, night_of, data, created_at, updated_at
+         FROM sleep_logs
+         ORDER BY night_of DESC`
+      )
 
   return NextResponse.json({ logs: result.rows })
 }
