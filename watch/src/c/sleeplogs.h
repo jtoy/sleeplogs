@@ -73,11 +73,14 @@ typedef struct {
 } ColumnDef;
 
 /* ─── Answer for a single column ──────────────────────────────────────── */
+#define MAX_CLIPS 8   /* max ~6s dictation clips per text answer */
 typedef struct {
   int  int_value;
   bool bool_value;
   char text_value[MAX_ANSWER_LEN];
   bool answered;
+  int  clip_count;          /* how many dictation clips are in text_value */
+  int  clip_starts[MAX_CLIPS]; /* byte index where each clip begins */
 } Answer;
 
 /* ─── App settings (persisted on watch) ────────────────────────────────── */
@@ -310,6 +313,51 @@ static inline void init_answer(Answer *a, const ColumnDef *c) {
     }
     /* text: nothing (empty) */
   }
+}
+
+/* ─── Chained dictation clips ──────────────────────────────────────
+ * Each dictation yields ~6s of speech. append_clip() adds a new clip
+ * separated by " + " and remembers where it starts so undo_clip() can
+ * remove exactly the last clip.
+ * Returns 1 appended, 2 appended-but-truncated (buffer full), 0 skipped.
+ */
+static inline int append_clip(Answer *a, const char *clip) {
+  if (!a || !clip || a->clip_count >= MAX_CLIPS) return 0;
+  a->text_value[MAX_ANSWER_LEN - 1] = '\0';
+  int cur = (int)strlen(a->text_value);
+  int clip_len = (int)strlen(clip);
+  int sep = (a->clip_count > 0) ? 3 : 0;               /* " + " */
+  int room = (MAX_ANSWER_LEN - 1) - cur - sep;
+  if (room <= 0 || clip_len == 0) return 0;            /* full or empty */
+  int truncated = 0;
+  if (clip_len > room) { clip_len = room; truncated = 1; }
+  int start = cur;
+  if (a->clip_count > 0) {
+    memcpy(a->text_value + cur, " + ", 3);
+    cur += 3;
+    start = cur;
+  }
+  memcpy(a->text_value + cur, clip, clip_len);
+  cur += clip_len;
+  a->text_value[cur] = '\0';
+  a->clip_starts[a->clip_count] = start;
+  a->clip_count++;
+  a->answered = true;
+  return truncated ? 2 : 1;
+}
+
+/* Remove the last appended clip (and its separator). Returns true if any. */
+static inline bool undo_clip(Answer *a) {
+  if (!a || a->clip_count <= 0) return false;
+  if (a->clip_count == 1) {
+    a->text_value[0] = '\0';
+  } else {
+    int start = a->clip_starts[a->clip_count - 1];
+    int cut = (start >= 3) ? (start - 3) : 0;   /* also drop " + " */
+    a->text_value[cut] = '\0';
+  }
+  a->clip_count--;
+  return true;
 }
 
 /* ─── Build the submit JSON payload ──────────────────────────────

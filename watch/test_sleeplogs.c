@@ -478,6 +478,64 @@ int main(void) {
     CHECK(strcmp(parsed[1].default_value_str, "400") == 0, "default: raw string kept");
   }
 
+  /* ─── chained dictation clips ────────────────────────────────── */
+  {
+    Answer a; memset(&a, 0, sizeof(a));
+
+    /* first clip */
+    int r = append_clip(&a, "woke at 3am");
+    CHECK(r == 1, "clip: first append ok");
+    CHECK(strcmp(a.text_value, "woke at 3am") == 0, "clip: text = first clip");
+    CHECK(a.clip_count == 1, "clip: count 1");
+    CHECK(a.clip_starts[0] == 0, "clip: first starts at 0");
+    CHECK(a.answered == true, "clip: answered set");
+
+    /* second clip appends with separator */
+    r = append_clip(&a, "couldnt sleep");
+    CHECK(r == 1, "clip: second append ok");
+    CHECK(strcmp(a.text_value, "woke at 3am + couldnt sleep") == 0, "clip: joined with separator");
+    CHECK(a.clip_count == 2, "clip: count 2");
+    CHECK(a.clip_starts[1] == (int)strlen("woke at 3am + "), "clip: second starts after sep");
+
+    /* undo removes exactly the last clip (+ separator) */
+    CHECK(undo_clip(&a) == true, "clip: undo ok");
+    CHECK(strcmp(a.text_value, "woke at 3am") == 0, "clip: undo restores first");
+    CHECK(a.clip_count == 1, "clip: count back to 1");
+
+    /* undo first clip clears entire text */
+    CHECK(undo_clip(&a) == true, "clip: undo second ok");
+    CHECK(a.text_value[0] == '\0', "clip: text empty after undoing all");
+    CHECK(a.clip_count == 0, "clip: count 0");
+    CHECK(undo_clip(&a) == false, "clip: undo with none is noop");
+
+    /* cap at MAX_CLIPS */
+    Answer b; memset(&b, 0, sizeof(b));
+    int appended = 0;
+    for (int i = 0; i < MAX_CLIPS + 2; i++) {
+      if (append_clip(&b, "clip") == 1) appended++;
+    }
+    CHECK(appended == MAX_CLIPS, "clip: caps at MAX_CLIPS");
+    CHECK(b.clip_count == MAX_CLIPS, "clip: count caps");
+    CHECK(append_clip(&b, "one more") == 0, "clip: rejects over cap");
+
+    /* truncation when buffer nearly full */
+    Answer c; memset(&c, 0, sizeof(c));
+    c.text_value[0] = '\0';
+    /* fill most of the buffer with one long clip that must be truncated */
+    char huge[300];
+    memset(huge, 'x', sizeof(huge) - 1);
+    huge[sizeof(huge) - 1] = '\0';
+    r = append_clip(&c, huge);
+    CHECK(r == 2, "clip: truncation signals 2");
+    CHECK((int)strlen(c.text_value) == MAX_ANSWER_LEN - 1, "clip: truncated to buffer");
+    CHECK(c.clip_count == 1, "clip: truncated count 1");
+
+    /* empty clip is skipped */
+    Answer d; memset(&d, 0, sizeof(d));
+    CHECK(append_clip(&d, "") == 0, "clip: empty skipped");
+    CHECK(d.clip_count == 0 && d.answered == false, "clip: empty leaves state");
+  }
+
   /* ─── Summary ───────────────────────────────────────────────── */
   int total = g_pass + g_fail;
   printf("\n%d/%d tests passed\n", g_pass, total);

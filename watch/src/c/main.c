@@ -87,6 +87,9 @@ static void update_display(void) {
   ColumnDef *col = &s_columns[s_current_question];
   Answer *ans = &s_answers[s_current_question];
 
+  /* Big font by default; text fields override to a smaller preview font. */
+  text_layer_set_font(s_value_layer, fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD));
+
   snprintf(title_buf, sizeof(title_buf), "%s", col->label);
   text_layer_set_text(s_title_layer, title_buf);
 
@@ -104,12 +107,15 @@ static void update_display(void) {
       snprintf(hint_buf, sizeof(hint_buf), "UP/DOWN toggle");
       break;
     case FIELD_TEXT:
-      if (ans->text_value[0]) {
-        snprintf(value_buf, sizeof(value_buf), "%.30s...", ans->text_value);
+      if (ans->clip_count > 0) {
+        snprintf(value_buf, sizeof(value_buf), "%d clip%s\n%.46s",
+                 ans->clip_count, ans->clip_count == 1 ? "" : "s", ans->text_value);
       } else {
         snprintf(value_buf, sizeof(value_buf), "(empty)");
       }
-      snprintf(hint_buf, sizeof(hint_buf), "SELECT = dictate");
+      snprintf(hint_buf, sizeof(hint_buf), "UP=speak  DOWN=undo\nSELECT=next");
+      /* text preview needs a smaller font than the big number font */
+      text_layer_set_font(s_value_layer, fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD));
       break;
     default:
       snprintf(value_buf, sizeof(value_buf), "?");
@@ -159,18 +165,19 @@ static void dictation_callback(DictationSession *session, DictationSessionStatus
   (void)session; (void)context;
   if (status == DictationSessionStatusSuccess && s_current_question < s_num_columns) {
     Answer *ans = &s_answers[s_current_question];
-    strncpy(ans->text_value, transcription, MAX_ANSWER_LEN - 1);
-    ans->text_value[MAX_ANSWER_LEN - 1] = '\0';
-    ans->answered = true;
+    int r = append_clip(ans, transcription);
+    APP_LOG(APP_LOG_LEVEL_INFO, "Dictation ok -> append result %d (clips %d)", r, ans->clip_count);
+    if (r == 2) {
+      text_layer_set_text(s_status_layer, "Note full");
+    } else if (r == 0) {
+      text_layer_set_text(s_status_layer, "Couldn't add (limit)");
+    }
     update_display();
   } else if (status != DictationSessionStatusSuccess && s_current_question < s_num_columns) {
-    /* Dictation unavailable or cancelled — mark skipped and advance so the
-     * questionnaire never dead-ends (real watches or emulator without mic). */
-    APP_LOG(APP_LOG_LEVEL_WARNING, "Dictation failed (%d) — skipping field", (int)status);
-    s_answers[s_current_question].answered = true;
-    s_answers[s_current_question].text_value[0] = '\0';
-    s_current_question++;
-    update_display();
+    /* Stay on the field: user can retry with UP or move on with SELECT. */
+    APP_LOG(APP_LOG_LEVEL_WARNING, "Dictation failed (%d) - stay on field", (int)status);
+    text_layer_set_text(s_status_layer, "Recording failed");
+    vibes_double_pulse();
   }
 }
 #endif
@@ -194,6 +201,15 @@ static void up_handler(ClickRecognizerRef r, void *ctx) {
     }
     case FIELD_BOOL:
       ans->bool_value = !ans->bool_value;
+      break;
+    case FIELD_TEXT:
+      /* UP = record a new clip (append to the note). */
+#if defined(PBL_MICROPHONE)
+      if (s_dictation_session) {
+        text_layer_set_text(s_status_layer, "");
+        dictation_session_start(s_dictation_session);
+      }
+#endif
       break;
     default:
       break;
@@ -220,6 +236,10 @@ static void down_handler(ClickRecognizerRef r, void *ctx) {
     case FIELD_BOOL:
       ans->bool_value = !ans->bool_value;
       break;
+    case FIELD_TEXT:
+      /* DOWN = undo the last recorded clip. */
+      if (undo_clip(ans)) vibes_short_pulse();
+      break;
     default:
       break;
   }
@@ -236,15 +256,9 @@ static void select_handler(ClickRecognizerRef r, void *ctx) {
   }
 
   ColumnDef *col = &s_columns[s_current_question];
+  (void)col;
 
-  if (col->field_type == FIELD_TEXT) {
-#if defined(PBL_MICROPHONE)
-    dictation_session_start(s_dictation_session);
-    return;
-#endif
-  }
-
-  /* Mark answered and advance */
+  /* Mark answered and advance (SELECT = next, same as every other question) */
   s_answers[s_current_question].answered = true;
   s_current_question++;
   update_display();
