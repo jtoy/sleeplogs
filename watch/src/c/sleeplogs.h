@@ -130,26 +130,28 @@ static inline bool settings_is_valid(const SleepSettings *s) {
 }
 
 /* ─── Night-of date derivation ─────────────────────────────────────────
- * If current time is before noon, the "night of" is yesterday.
- * If noon or later, "night of" is today.
- * Writes "YYYY-MM-DD" into buf.
+ * The log you file on calendar day D is ALWAYS about the night you just
+ * slept: night_of = D - 1. (Woke 9/3 -> your sleep was night of 9/2.)
+ * There is deliberately no noon boundary; "tonight" is never loggable
+ * until tomorrow. Writes "YYYY-MM-DD" into buf.
  */
 static inline void night_of_date(const struct tm *now, char *buf, int bufsize) {
+  if (!now || !buf || bufsize <= 0) return;
   struct tm adjusted = *now;
-  if (adjusted.tm_hour < 12) {
-    /* Before noon — this is "last night", so subtract one day.
-     * Use mktime to handle month/year rollovers. */
-    adjusted.tm_mday -= 1;
-    time_t t = mktime(&adjusted);
-    struct tm *fixed = localtime(&t);
-    if (fixed) {
-      snprintf(buf, bufsize, "%04d-%02d-%02d",
-               fixed->tm_year + 1900, fixed->tm_mon + 1, fixed->tm_mday);
-      return;
-    }
+  adjusted.tm_mday -= 1;   /* always the previous day */
+  time_t t = mktime(&adjusted);   /* mktime normalizes month/year rolls */
+  struct tm *fixed = localtime(&t);
+  if (fixed) {
+    snprintf(buf, bufsize, "%04d-%02d-%02d",
+             fixed->tm_year + 1900, fixed->tm_mon + 1, fixed->tm_mday);
   }
+}
+
+/* The wake/filing day (today) as "YYYY-MM-DD". */
+static inline void wake_day_date(const struct tm *now, char *buf, int bufsize) {
+  if (!now || !buf || bufsize <= 0) return;
   snprintf(buf, bufsize, "%04d-%02d-%02d",
-           adjusted.tm_year + 1900, adjusted.tm_mon + 1, adjusted.tm_mday);
+           now->tm_year + 1900, now->tm_mon + 1, now->tm_mday);
 }
 
 /* ─── Next wakeup time calculation ─────────────────────────────────────
@@ -375,17 +377,18 @@ static inline bool undo_clip(Answer *a) {
 }
 
 /* ─── Build the submit JSON payload ──────────────────────────────
- * {"night_of":"YYYY-MM-DD","data":{"key":value,...}}
+ * {"night_of":"YYYY-MM-DD","day":"YYYY-MM-DD","data":{"key":value,...}}
  * Only columns with answered=true are included, so finishing early never
  * writes default values for skipped questions. Text values are escaped.
  * Returns number of bytes written.
  */
 static inline int build_log_json(const ColumnDef *cols, const Answer *answers,
-                                 int num, const char *night_of,
+                                 int num, const char *night_of, const char *day,
                                  char *buf, int bufsize) {
   if (!buf || bufsize <= 0) return 0;
   int pos = 0;
-  int len = snprintf(buf, bufsize, "{\"night_of\":\"%s\",\"data\":{", night_of ? night_of : "");
+  int len = snprintf(buf, bufsize, "{\"night_of\":\"%s\",\"day\":\"%s\",\"data\":{",
+                     night_of ? night_of : "", day ? day : "");
   if (len < 0) return 0;
   pos = (len >= bufsize) ? (bufsize - 1) : len;
 

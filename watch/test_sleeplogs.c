@@ -37,6 +37,7 @@ static struct tm make_tm(int year, int mon, int day, int hour, int min) {
 
 int main(void) {
   char buf[64];
+  char buf2[64];
 
   /* ─── parse_field_type ──────────────────────────────────────── */
   CHECK(parse_field_type("rating") == FIELD_RATING, "parse rating");
@@ -89,44 +90,53 @@ int main(void) {
   s.reminder_interval = 30;
   CHECK(settings_is_valid(&s), "restored valid");
 
-  /* ─── night_of_date ─────────────────────────────────────────── */
+  /* ─── night_of_date: ALWAYS yesterday (filed day D -> night D-1) ── */
 
-  /* 6:00 AM → before noon → last night = yesterday */
+  /* 6:00 AM -> yesterday */
   {
     struct tm t = make_tm(2026, 8, 27, 6, 0);
     night_of_date(&t, buf, sizeof buf);
     CHECK(strcmp(buf, "2026-08-26") == 0, "6am -> yesterday (Aug 26)");
   }
 
-  /* 11:59 AM → before noon → yesterday */
+  /* 11:59 AM -> yesterday (no noon boundary anymore) */
   {
     struct tm t = make_tm(2026, 8, 27, 11, 59);
     night_of_date(&t, buf, sizeof buf);
     CHECK(strcmp(buf, "2026-08-26") == 0, "11:59am -> yesterday");
   }
 
-  /* 12:00 PM → noon → today */
+  /* 12:00 PM -> yesterday (was: today) */
   {
     struct tm t = make_tm(2026, 8, 27, 12, 0);
     night_of_date(&t, buf, sizeof buf);
-    CHECK(strcmp(buf, "2026-08-27") == 0, "noon -> today");
+    CHECK(strcmp(buf, "2026-08-26") == 0, "noon -> yesterday");
   }
 
-  /* 10:00 PM → today */
+  /* 10:00 PM -> yesterday (was: today) — the 8pm "tonight" bug case */
   {
     struct tm t = make_tm(2026, 8, 27, 22, 0);
     night_of_date(&t, buf, sizeof buf);
-    CHECK(strcmp(buf, "2026-08-27") == 0, "10pm -> today");
+    CHECK(strcmp(buf, "2026-08-26") == 0, "10pm -> yesterday");
   }
 
-  /* Midnight → before noon → yesterday */
+  /* Midnight -> yesterday (D-1) */
   {
     struct tm t = make_tm(2026, 8, 27, 0, 0);
     night_of_date(&t, buf, sizeof buf);
     CHECK(strcmp(buf, "2026-08-26") == 0, "midnight -> yesterday");
   }
 
-  /* Month rollover: Jan 1, 3:00 AM → Dec 31 of previous year */
+  /* User scenario: woke + filed 9/3 ~5:30am -> night_of = 9/2 */
+  {
+    struct tm t = make_tm(2026, 9, 3, 5, 30);
+    night_of_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-09-02") == 0, "woke 9/3 5:30am -> night of 9/2");
+    wake_day_date(&t, buf2, sizeof buf2);
+    CHECK(strcmp(buf2, "2026-09-03") == 0, "wake day = 9/3 (today)");
+  }
+
+  /* Month rollover: Jan 1, 3:00 AM -> Dec 31 of previous year */
   {
     struct tm t = make_tm(2027, 1, 1, 3, 0);
     night_of_date(&t, buf, sizeof buf);
@@ -147,18 +157,18 @@ int main(void) {
     CHECK(strcmp(buf, "2026-02-28") == 0, "Mar 1 2026 3am -> Feb 28");
   }
 
-  /* 1st of month morning -> last day of previous month */
+  /* 1st of month evening -> last day of previous month */
   {
-    struct tm t = make_tm(2026, 9, 1, 5, 30);
+    struct tm t = make_tm(2026, 9, 1, 22, 0);
     night_of_date(&t, buf, sizeof buf);
-    CHECK(strcmp(buf, "2026-08-31") == 0, "Sep 1 5:30am -> Aug 31");
+    CHECK(strcmp(buf, "2026-08-31") == 0, "Sep 1 10pm -> Aug 31");
   }
 
-  /* Just before noon on a Sunday -> Saturday */
+  /* wake_day_date basic */
   {
     struct tm t = make_tm(2026, 8, 30, 11, 59);
-    night_of_date(&t, buf, sizeof buf);
-    CHECK(strcmp(buf, "2026-08-29") == 0, "Aug 30 11:59am -> Aug 29");
+    wake_day_date(&t, buf, sizeof buf);
+    CHECK(strcmp(buf, "2026-08-30") == 0, "wake day = 2026-08-30");
   }
 
   /* ─── next_wakeup_time ──────────────────────────────────────── */
@@ -389,24 +399,24 @@ int main(void) {
     char m[256];
 
     /* none answered → empty data object */
-    int n = build_log_json(cols, ans, 3, "2026-09-01", json, sizeof(json));
+    int n = build_log_json(cols, ans, 3, "2026-09-01", "2026-09-02", json, sizeof(json));
     snprintf(m, sizeof(m), "none answered → empty data (got %s)", json);
-    CHECK(strcmp(json, "{\"night_of\":\"2026-09-01\",\"data\":{}}") == 0, m);
+    CHECK(strcmp(json, "{\"night_of\":\"2026-09-01\",\"day\":\"2026-09-02\",\"data\":{}}") == 0, m);
     CHECK(n > 0, "build_log_json: nonzero length");
 
     /* only answered fields included */
     ans[1].answered = true; ans[1].int_value = 3;
-    n = build_log_json(cols, ans, 3, "2026-09-01", json, sizeof(json));
+    n = build_log_json(cols, ans, 3, "2026-09-01", "2026-09-02", json, sizeof(json));
     snprintf(m, sizeof(m), "only answered fields (got %s)", json);
-    CHECK(strcmp(json, "{\"night_of\":\"2026-09-01\",\"data\":{\"woke_up_times\":3}}") == 0, m);
+    CHECK(strcmp(json, "{\"night_of\":\"2026-09-01\",\"day\":\"2026-09-02\",\"data\":{\"woke_up_times\":3}}") == 0, m);
 
     /* all three: int + bool + rating order */
     ans[0].answered = true; ans[0].int_value = 5;
     ans[2].answered = true; ans[2].bool_value = true;
-    n = build_log_json(cols, ans, 3, "2026-09-01", json, sizeof(json));
+    n = build_log_json(cols, ans, 3, "2026-09-01", "2026-09-02", json, sizeof(json));
     snprintf(m, sizeof(m), "mixed fields (got %s)", json);
     CHECK(strcmp(json,
-      "{\"night_of\":\"2026-09-01\",\"data\":{\"sleep_rating\":5,\"woke_up_times\":3,\"nap\":true}}") == 0, m);
+      "{\"night_of\":\"2026-09-01\",\"day\":\"2026-09-02\",\"data\":{\"sleep_rating\":5,\"woke_up_times\":3,\"nap\":true}}") == 0, m);
 
     /* text escaping */
     ColumnDef tcol; memset(&tcol, 0, sizeof(tcol));
@@ -414,13 +424,13 @@ int main(void) {
     strcpy(tcol.key, "notes"); tcol.field_type = FIELD_TEXT;
     tans.answered = true;
     strcpy(tans.text_value, "He said \"hi\" then \\ ok");
-    n = build_log_json(&tcol, &tans, 1, "2026-09-01", json, sizeof(json));
+    n = build_log_json(&tcol, &tans, 1, "2026-09-01", "2026-09-02", json, sizeof(json));
     snprintf(m, sizeof(m), "text escaping (got %s)", json);
     CHECK(strcmp(json,
-      "{\"night_of\":\"2026-09-01\",\"data\":{\"notes\":\"He said \\\"hi\\\" then \\\\ ok\"}}") == 0, m);
+      "{\"night_of\":\"2026-09-01\",\"day\":\"2026-09-02\",\"data\":{\"notes\":\"He said \\\"hi\\\" then \\\\ ok\"}}") == 0, m);
 
     /* null night_of tolerated */
-    n = build_log_json(cols, ans, 3, NULL, json, sizeof(json));
+    n = build_log_json(cols, ans, 3, NULL, NULL, json, sizeof(json));
     CHECK(strstr(json, "\"night_of\":\"\"") != NULL, "build_log_json: null night_of");
   }
 

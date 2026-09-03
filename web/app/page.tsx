@@ -19,6 +19,7 @@ interface Column {
 interface SleepLog {
   id: number
   night_of: string
+  day?: string | null
   data: Record<string, unknown>
   created_at: string
 }
@@ -162,7 +163,7 @@ export default function Dashboard() {
   }
 
   // ─── Add/Edit log form state ────────────────────────────────
-  const [editor, setEditor] = useState<{ night: string; values: Record<string, string>; editing: SleepLog | null } | null>(null)
+  const [editor, setEditor] = useState<{ night: string; day: string; values: Record<string, string>; editing: SleepLog | null } | null>(null)
 
   function openAddLog() {
     const values: Record<string, string> = {}
@@ -170,7 +171,11 @@ export default function Dashboard() {
       values[c.key] = c.default_value ?? (c.field_type === "bool" ? "false" : "")
       if (values[c.key] === null) values[c.key] = ""
     }
-    setEditor({ night: new Date().toISOString().slice(0, 10), values, editing: null })
+    // Today = wake/filing day; night_of = yesterday (this morning's log = last night).
+    const today = new Date()
+    const y = today.toISOString().slice(0, 10)
+    const n = new Date(today.getTime() - 86400000).toISOString().slice(0, 10)
+    setEditor({ night: n, day: y, values, editing: null })
   }
 
   function openEditLog(log: SleepLog) {
@@ -179,7 +184,9 @@ export default function Dashboard() {
       const v = log.data[c.key]
       values[c.key] = v === undefined || v === null ? "" : String(v)
     }
-    setEditor({ night: String(log.night_of).slice(0, 10), values, editing: log })
+    const night = String(log.night_of).slice(0, 10)
+    const day = (log.day ? String(log.day).slice(0, 10) : "") || new Date(new Date(night + "T00:00:00Z").getTime() + 86400000).toISOString().slice(0, 10)
+    setEditor({ night, day, values, editing: log })
   }
 
   function setEditorValue(key: string, v: string) {
@@ -209,7 +216,7 @@ export default function Dashboard() {
     }
     await authenticatedFetch("/api/write_log", {
       method: "POST",
-      body: JSON.stringify({ night_of: editor.night, data }),
+      body: JSON.stringify({ night_of: editor.night, day: editor.day, data }),
     })
     setEditor(null)
     fetchData()
@@ -479,7 +486,12 @@ export default function Dashboard() {
           </div>
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
             <label className="block text-xs font-medium text-gray-600">
-              Night of
+              Day (woke up)
+              <input type="date" required value={editor.day} onChange={(e) => setEditor({ ...editor, day: e.target.value })}
+                className="block w-full border rounded px-2 py-1 text-sm mt-1" />
+            </label>
+            <label className="block text-xs font-medium text-gray-600">
+              Night of (sleep was)
               <input type="date" required value={editor.night} onChange={(e) => setEditor({ ...editor, night: e.target.value })}
                 className="block w-full border rounded px-2 py-1 text-sm mt-1" />
             </label>
@@ -523,6 +535,7 @@ export default function Dashboard() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b bg-gray-50">
+              <th className="px-4 py-3 text-left font-semibold">Day (woke)</th>
               <th className="px-4 py-3 text-left font-semibold">Night Of</th>
               {columns.map((col) => (
                 <th key={col.key} className="px-4 py-3 text-left font-semibold">{col.label}</th>
@@ -533,14 +546,15 @@ export default function Dashboard() {
           <tbody>
             {logs.length === 0 && (
               <tr>
-                <td colSpan={columns.length + 2} className="px-4 py-8 text-center text-gray-400">
+                <td colSpan={columns.length + 3} className="px-4 py-8 text-center text-gray-400">
                   No logs yet. Submit from your watch, or add one above.
                 </td>
               </tr>
             )}
             {logs.map((log) => (
               <tr key={log.id} className="border-b hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium">{String(log.night_of).slice(0, 10)}</td>
+                <td className="px-4 py-3 font-medium">{(log.day ? String(log.day).slice(0, 10) : "") || "—"}</td>
+                <td className="px-4 py-3 text-gray-600">{String(log.night_of).slice(0, 10)}</td>
                 {columns.map((col) => (
                   <td key={col.key} className="px-4 py-3">
                     {formatValue(log.data[col.key], col.field_type)}

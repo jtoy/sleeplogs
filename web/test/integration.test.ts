@@ -58,7 +58,7 @@ describe.skipIf(skip)("DB integration (test database)", () => {
     pool = db.getPool()
 
     // Run migrations (idempotent).
-    const migrations = ["001_create_columns.sql", "002_create_sleep_logs.sql", "003_seed_columns.sql"]
+    const migrations = ["001_create_columns.sql", "002_create_sleep_logs.sql", "003_seed_columns.sql", "004_add_day_to_sleep_logs.sql"]
     for (const f of migrations) {
       const sql = fs.readFileSync(path.join(__dirname, "..", "migrations", f), "utf8")
       await query(sql)
@@ -96,12 +96,23 @@ describe.skipIf(skip)("DB integration (test database)", () => {
   it("POST /api/write_log inserts a new log", async () => {
     const res = await writeLogPOST(jsonReq("http://localhost/api/write_log", {
       method: "POST",
-      body: { night_of: "1999-01-01", data: { sleep_rating: 5, notes: "integration test" } },
+      body: { night_of: "1999-01-01", day: "1999-01-02", data: { sleep_rating: 5, notes: "integration test" } },
     }))
     expect(res.status).toBe(200)
-    const rows = (await query("SELECT night_of::text, data FROM sleep_logs WHERE night_of = '1999-01-01'")).rows
+    const rows = (await query("SELECT night_of::text, day::text, data FROM sleep_logs WHERE night_of = '1999-01-01'")).rows
     expect(rows).toHaveLength(1)
     expect(rows[0].data.sleep_rating).toBe(5)
+    expect(rows[0].day.slice(0, 10)).toBe("1999-01-02")
+  })
+
+  it("POST /api/write_log defaults day to night_of + 1 when omitted", async () => {
+    const res = await writeLogPOST(jsonReq("http://localhost/api/write_log", {
+      method: "POST",
+      body: { night_of: "1999-01-10", data: { sleep_rating: 4 } },
+    }))
+    expect(res.status).toBe(200)
+    const rows = (await query("SELECT day::text FROM sleep_logs WHERE night_of = '1999-01-10'")).rows
+    expect(rows[0].day.slice(0, 10)).toBe("1999-01-11")
   })
 
   it("POST /api/write_log MERGES instead of replacing (the incident scenario)", async () => {

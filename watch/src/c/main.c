@@ -158,12 +158,14 @@ static void submit_log(void) {
   /* Build a compact JSON payload for PKJS to POST */
   static char json[2048];
   char night[16];
+  char day[16];
   time_t now = time(NULL);
   struct tm *lt = localtime(&now);
   if (!lt) return;
   night_of_date(lt, night, sizeof(night));
+  wake_day_date(lt, day, sizeof(day));
 
-  build_log_json(s_columns, s_answers, s_num_columns, night, json, sizeof(json));
+  build_log_json(s_columns, s_answers, s_num_columns, night, day, json, sizeof(json));
 
   /* Send via AppMessage */
   DictionaryIterator *iter;

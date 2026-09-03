@@ -164,7 +164,7 @@ describe("POST /api/write_log", () => {
       body: { night_of: "2026-08-27", data },
     }))
     const params = vi.mocked(query).mock.calls[0][1] as unknown[]
-    expect(JSON.parse(params[1] as string)).toEqual(data)
+    expect(JSON.parse(params[2] as string)).toEqual(data)
   })
 
   it("accepts empty data object", async () => {
@@ -175,6 +175,20 @@ describe("POST /api/write_log", () => {
       body: { night_of: "2026-08-27" },
     }))
     expect(res.status).toBe(200)
+  })
+
+  it("accepts day alongside night_of", async () => {
+    vi.mocked(query).mockResolvedValue({ rows: [{ id: 11 }] } as any)
+    vi.mocked(query).mockResolvedValueOnce({ rows: [{ id: 11 }] } as any)
+    const res = await writeLogPOST(mockRequest({
+      method: "POST",
+      headers: { Authorization: "Bearer tok" },
+      body: { night_of: "2026-09-02", day: "2026-09-03", data: { sleep_rating: 4 } },
+    }))
+    expect(res.status).toBe(200)
+    const params = vi.mocked(query).mock.calls[0][1] as unknown[]
+    expect(params[1]).toBe("2026-09-03")
+    expect(params[0]).toBe("2026-09-02")
   })
 
   it("rejects invalid JSON body", async () => {

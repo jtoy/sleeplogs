@@ -16,20 +16,22 @@ export async function POST(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
   }
-  const { night_of, data } = body
+  const { night_of, day, data } = body
 
   if (!night_of) {
     return NextResponse.json({ error: "night_of is required" }, { status: 400 })
   }
 
+  // day = the wake/filing date; defaults to the night after night_of.
   const result = await query(
-    `INSERT INTO sleep_logs (night_of, data)
-     VALUES ($1, $2)
+    `INSERT INTO sleep_logs (night_of, day, data)
+     VALUES ($1, COALESCE($2::date, $1::date + 1), $3)
      ON CONFLICT (night_of) DO UPDATE
-       SET data = COALESCE(sleep_logs.data, '{}'::jsonb) || EXCLUDED.data,
+       SET day = COALESCE(EXCLUDED.day, sleep_logs.day),
+           data = COALESCE(sleep_logs.data, '{}'::jsonb) || EXCLUDED.data,
            updated_at = NOW()
      RETURNING id`,
-    [night_of, JSON.stringify(data || {})]
+    [night_of, day || null, JSON.stringify(data || {})]
   )
 
   return NextResponse.json({ ok: true, id: result.rows[0].id })
