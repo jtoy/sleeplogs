@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo } from "react"
-import { login, logout, getStoredUser, getToken, authenticatedFetch, type User } from "../lib/api-client"
+import { login, logout, getStoredUser, authenticatedFetch, type User } from "../lib/api-client"
 import { randomHealthQuote } from "../lib/quotes"
 import { computeStreaks } from "../lib/streaks"
 
@@ -32,7 +32,6 @@ export default function Dashboard() {
   const [allColumns, setAllColumns] = useState<Column[]>([])
   const [logs, setLogs] = useState<SleepLog[]>([])
   const [error, setError] = useState("")
-  const [copyMsg, setCopyMsg] = useState("")
   const [loading, setLoading] = useState(false)
 
   // Random health quote, picked once per page load
@@ -162,6 +161,37 @@ export default function Dashboard() {
     fetchData()
   }
 
+  // ─── Column edit state + save ────────────────────────────────
+  const [editCol, setEditCol] = useState<Column | null>(null)
+  const [editColDraft, setEditColDraft] = useState({ label: "", field_type: "int", default_value: "", min_value: "", max_value: "" })
+
+  function openEditCol(col: Column) {
+    setEditColDraft({
+      label: col.label,
+      field_type: col.field_type,
+      default_value: col.default_value ?? "",
+      min_value: col.min_value === null || col.min_value === undefined ? "" : String(col.min_value),
+      max_value: col.max_value === null || col.max_value === undefined ? "" : String(col.max_value),
+    })
+    setEditCol(col)
+  }
+
+  async function saveEditCol(e: React.FormEvent) {
+    e.preventDefault()
+    if (!editCol) return
+    const body: Record<string, unknown> = {
+      key: editCol.key,
+      label: editColDraft.label.trim() || editCol.label,
+      field_type: editColDraft.field_type,
+      default_value: editColDraft.default_value.trim() === "" ? null : editColDraft.default_value.trim(),
+      min_value: editColDraft.min_value.trim() === "" ? null : Number(editColDraft.min_value.trim()),
+      max_value: editColDraft.max_value.trim() === "" ? null : Number(editColDraft.max_value.trim()),
+    }
+    await authenticatedFetch("/api/columns", { method: "PATCH", body: JSON.stringify(body) })
+    setEditCol(null)
+    fetchData()
+  }
+
   // ─── Add/Edit log form state ────────────────────────────────
   const [editor, setEditor] = useState<{ night: string; day: string; values: Record<string, string>; editing: SleepLog | null } | null>(null)
 
@@ -265,15 +295,6 @@ export default function Dashboard() {
     return String(val)
   }
 
-  function copyTokenForWatch() {
-    const token = getToken()
-    if (!token) return
-    navigator.clipboard.writeText(token).then(() => {
-      setCopyMsg("Copied! Paste into watch settings")
-      setTimeout(() => setCopyMsg(""), 3000)
-    })
-  }
-
   function exportCSV() {
     if (!logs.length || !columns.length) return
     const header = ["night_of", ...columns.map((c) => c.key)].join(",")
@@ -344,8 +365,6 @@ export default function Dashboard() {
           <p className="text-sm text-gray-500">{user.email}</p>
         </div>
         <div className="flex gap-3">
-          <button onClick={copyTokenForWatch} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 text-sm" title="Copy your ORC token for the watch app's settings">Get Watch Token</button>
-          {copyMsg && <span className="text-xs text-green-600 self-center">{copyMsg}</span>}
           <button onClick={exportCSV} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm">
             Export CSV
           </button>
@@ -458,6 +477,26 @@ export default function Dashboard() {
                 />
               </label>
               <span className="flex-1" />
+              {editCol && editCol.key === col.key && (
+                <form onSubmit={saveEditCol} className="flex flex-wrap items-center gap-2 mr-2">
+                  <input value={editColDraft.label} onChange={(e) => setEditColDraft({ ...editColDraft, label: e.target.value })}
+                    placeholder="Label" className="border rounded px-1 py-0.5 text-xs w-28" />
+                  <select value={editColDraft.field_type} onChange={(e) => setEditColDraft({ ...editColDraft, field_type: e.target.value })}
+                    className="border rounded px-1 py-0.5 text-xs">
+                    <option value="int">int</option><option value="rating">rating</option>
+                    <option value="bool">bool</option><option value="text">text</option>
+                  </select>
+                  <input value={editColDraft.default_value} onChange={(e) => setEditColDraft({ ...editColDraft, default_value: e.target.value })}
+                    placeholder="default" className="border rounded px-1 py-0.5 text-xs w-16" />
+                  <input value={editColDraft.min_value} onChange={(e) => setEditColDraft({ ...editColDraft, min_value: e.target.value })}
+                    placeholder="min" className="border rounded px-1 py-0.5 text-xs w-12" />
+                  <input value={editColDraft.max_value} onChange={(e) => setEditColDraft({ ...editColDraft, max_value: e.target.value })}
+                    placeholder="max" className="border rounded px-1 py-0.5 text-xs w-12" />
+                  <button type="submit" className="px-2 py-0.5 border rounded text-green-700 hover:bg-green-50 text-xs">Save</button>
+                  <button type="button" onClick={() => setEditCol(null)} className="px-2 py-0.5 border rounded text-gray-500 hover:bg-gray-100 text-xs">✕</button>
+                </form>
+              )}
+              <button onClick={() => openEditCol(col)} className="px-2 py-0.5 border rounded hover:bg-gray-100" title="Edit column">✎</button>
               <button onClick={() => moveColumn(col.key, -1)} disabled={i === 0}
                 className="px-2 py-0.5 border rounded hover:bg-gray-100 disabled:opacity-30" title="Move up">↑</button>
               <button onClick={() => moveColumn(col.key, 1)} disabled={i === allColumns.length - 1}
