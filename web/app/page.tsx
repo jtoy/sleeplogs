@@ -213,6 +213,7 @@ export default function Dashboard() {
 
   // ─── Add column form state ─────────────────────────────────
   const [showAddForm, setShowAddForm] = useState(false)
+  const [showColumnsPanel, setShowColumnsPanel] = useState(false)
   const [newCol, setNewCol] = useState({
     key: "",
     label: "",
@@ -366,18 +367,24 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Column Manager — reorder, add, remove, toggle */}
+      {/* Column Manager — collapsed by default, expand on demand */}
       <div className="bg-white rounded-lg shadow p-4 mb-6">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-gray-500">COLUMNS (order + on/off — watch app updates on next launch)</h2>
-          <button
-            onClick={() => setShowAddForm(!showAddForm)}
-            className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-          >
-            {showAddForm ? "Cancel" : "+ Add Column"}
+        <div className="flex items-center justify-between">
+          <button onClick={() => setShowColumnsPanel(!showColumnsPanel)} className="text-sm font-semibold text-gray-500 hover:text-gray-700">
+            {showColumnsPanel ? "▾" : "▸"} COLUMNS
+            <span className="text-gray-400 font-normal"> ({" "}{allColumns.filter((c) => c.enabled !== false).length}/{allColumns.length} active)</span>
           </button>
+          {showColumnsPanel && (
+            <button
+              onClick={() => setShowAddForm(!showAddForm)}
+              className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+            >
+              {showAddForm ? "Cancel" : "+ Add Column"}
+            </button>
+          )}
         </div>
 
+        {showColumnsPanel && (<>
         {/* Add column form */}
         {showAddForm && (
           <form onSubmit={addColumn} className="border rounded p-3 mb-3 bg-gray-50 grid gap-2 md:grid-cols-6">
@@ -444,6 +451,7 @@ export default function Dashboard() {
           ))}
         </div>
         <p className="text-xs text-gray-400 mt-2">Reordering and toggles apply to the watch on its next app open. Deleting keeps old data in the DB. Type into a column's <span className="font-mono">default</span> box to set the value the watch pre-fills (numbers for int/rating, true/false for bool, any text for text fields).</p>
+        </>)}
       </div>
 
       {/* Logs Table */}
